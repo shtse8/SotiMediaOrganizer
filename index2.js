@@ -1,10 +1,37 @@
 import fs from 'fs/promises'
 import path from 'path'
 import util from 'util'
-import { exec as execCallback } from 'child_process'
+import { spawn } from 'child_process'
 import { Semaphore } from 'async-mutex'
 
-const exec = util.promisify(execCallback)
+// Function to wrap spawn in a promise
+function exec(command, args = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args);
+    let stdoutData = '';
+    let stderrData = '';
+
+    child.stdout.on('data', (data) => {
+      stdoutData += data;
+    });
+
+    child.stderr.on('data', (data) => {
+      stderrData += data;
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(stdoutData);
+      } else {
+        reject(new Error(`Child process exited with code ${code}\n${stderrData}`));
+      }
+    });
+
+    child.on('error', (error) => {
+      reject(error);
+    });
+  });
+}
 
 async function isExists(path) {
   try {
@@ -140,7 +167,7 @@ function tryGetDateFromFileName(path) {
 
 
 async function getDate(path) {
-  const output = await exec(`exiftool ${path}`)
+  const output = await exec('exiftool', [path])
   const outputValues = getAllDateValues(output)
 
   // if Date/Time Original exists, use it
@@ -204,13 +231,13 @@ async function processPhoto(photo) {
       const ext = path.extname(targetPath)
       const base = path.basename(targetPath, ext)
       const dir = path.dirname(targetPath)
-      const photoMd5 = await exec(`md5sum ${photo}`)
+      const photoMd5 = await exec('md5sum', [photo])
 
       let isSame = false
       let i = 1
       while (await isExists(targetPath)) {
         // compare md5
-        const targetMd5 = await exec(`md5sum ${targetPath}`)
+        const targetMd5 = await exec('md5sum', [targetPath])
         if (photoMd5 === targetMd5) {
           console.log(`${photo}: same file, skip`);
           isSame = true
