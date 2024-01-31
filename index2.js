@@ -213,9 +213,10 @@ if (!await isExists(targetDir)) {
 
 async function getMd5(path) {
   const output = await exec('md5sum', [path])
-  const match = output.match(/^(.+?)\s+/)
+  // match md5 pattern
+  const match = output.match(/(\w{32})/)
   if (!match) {
-    return null
+    throw new Error('No md5')
   }
   return match[1]
 }
