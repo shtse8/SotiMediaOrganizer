@@ -212,6 +212,7 @@ if (!await isExists(targetDir)) {
 }
 
 async function getMd5(path) {
+  console.log(`Getting md5 of ${path}`)
   const output = await exec('md5sum', [path])
   // match md5 pattern
   const match = output.match(/(\w{32})/)
