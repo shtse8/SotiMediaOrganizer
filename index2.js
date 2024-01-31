@@ -269,10 +269,14 @@ async function processPhoto(photo) {
 
           // const targetMd5 = await hashFirstPartOfFile(targetPath)
           // if (photoMd5 === targetMd5) {
-          console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
-          isSame = true
+          //   console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
+          //   isSame = true
           //   break
           // }
+
+          console.log(`${photo}: same file, skip`);
+          isSame = true
+          break
         }
         targetPath = path.join(dir, `${base} (${i})${ext}`)
         i++
