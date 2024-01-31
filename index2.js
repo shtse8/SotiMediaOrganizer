@@ -1,6 +1,5 @@
 import fs from 'fs/promises'
 import path from 'path'
-import util from 'util'
 import { spawn } from 'child_process'
 import { Semaphore } from 'async-mutex'
 import crypto from 'crypto'
@@ -25,7 +24,7 @@ function exec(command, args = []) {
       if (code === 0) {
         resolve(stdoutData);
       } else {
-        reject(new Error(`Child process exited with code ${code}\n${stderrData}`));
+        reject(new Error(`Child process exited with code ${code}\n${stderrData}, ${command} ${args.join(' ')}`));
       }
     });
 
