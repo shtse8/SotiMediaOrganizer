@@ -4,6 +4,7 @@ import util from 'util'
 import { spawn } from 'child_process'
 import { Semaphore } from 'async-mutex'
 import crypto from 'crypto'
+import { createReadStream } from 'fs'
 
 // Function to wrap spawn in a promise
 function exec(command, args = []) {
@@ -215,7 +216,7 @@ if (!await isExists(targetDir)) {
 function hashFirstPartOfFile(filePath, length = 10 * 1024 * 1024 /* 10MB */) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('md5');
-    const stream = fs.createReadStream(filePath, { end: length - 1 });
+    const stream = createReadStream(filePath, { end: length - 1 });
 
     stream.on('data', chunk => hash.update(chunk));
     stream.on('end', () => resolve(hash.digest('hex')));
