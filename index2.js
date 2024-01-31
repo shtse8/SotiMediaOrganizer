@@ -225,6 +225,15 @@ function hashFirstPartOfFile(filePath, length = 10 * 1024 * 1024 /* 10MB */) {
   });
 }
 
+async function moveFile(source, target) {
+  // create target dir if not exist
+  if (!await isExists(path.dirname(target))) {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+  }
+
+  await fs.rename(source, target)
+}
+
 async function getMd5(path) {
   console.log(`Getting md5 of ${path}`)
   const output = await exec('md5sum', [path])
@@ -245,9 +254,6 @@ async function processPhoto(photo) {
     let targetPath = date ?
       path.join(targetDir, date.getFullYear().toString(), (date.getMonth() + 1).toString(), date.getDate().toString(), path.basename(photo)) :
       path.join(targetDir, 'Unknown', path.basename(photo));
-    if (!await isExists(path.dirname(targetPath))) {
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    }
 
     // if target file exists, compare two files md5, if same, skip, if not same, rename
     if (await isExists(targetPath)) {
@@ -288,12 +294,12 @@ async function processPhoto(photo) {
       }
     }
 
-    await fs.rename(photo, targetPath);
+    await moveFile(photo, targetPath);
   } catch (e) {
     console.log(`${photo}: ${e}`);
     // move photo to error dir
     const targetPath = path.join(errorDir, path.basename(photo));
-    await fs.rename(photo, targetPath);
+    await moveFile(photo, targetPath);
   }
 }
 
