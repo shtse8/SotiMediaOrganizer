@@ -211,6 +211,14 @@ if (!await isExists(targetDir)) {
   await fs.mkdir(targetDir);
 }
 
+async function getMd5(path) {
+  const output = await exec('md5sum', [path])
+  const match = output.match(/^(.+?)\s+/)
+  if (!match) {
+    return null
+  }
+  return match[1]
+}
 
 async function processPhoto(photo) {
   try {
@@ -231,13 +239,13 @@ async function processPhoto(photo) {
       const ext = path.extname(targetPath)
       const base = path.basename(targetPath, ext)
       const dir = path.dirname(targetPath)
-      const photoMd5 = await exec('md5sum', [photo])
+      const photoMd5 = await getMd5(photo)
 
       let isSame = false
       let i = 1
       while (await isExists(targetPath)) {
         // compare md5
-        const targetMd5 = await exec('md5sum', [targetPath])
+        const targetMd5 = await getMd5(targetPath)
         if (photoMd5 === targetMd5) {
           console.log(`${photo}: same file, skip`);
           isSame = true
