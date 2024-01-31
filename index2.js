@@ -252,7 +252,7 @@ async function processPhoto(photo) {
       const ext = path.extname(targetPath)
       const base = path.basename(targetPath, ext)
       const dir = path.dirname(targetPath)
-      const photoMd5
+      let photoMd5
       const photoStat = await fs.stat(targetPath)
       const fileSize = photoStat.size
       console.log(`${photo}: same name, try rename`);
