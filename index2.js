@@ -48,6 +48,8 @@ const paths = [
   '/mnt/volume1/homes/kyle/unorganized/Lightroom2/',
 ]
 const targetDir = '/mnt/volume1/homes/kyle/organized_photo/';
+const errorDir = '/mnt/volume1/homes/kyle/organized_photo_error/';
+const duplicateDir = '/mnt/volume1/homes/kyle/organized_photo_duplicate/';
 
 
 
@@ -282,13 +284,16 @@ async function processPhoto(photo) {
         i++
       }
       if (isSame) {
-        return
+        targetPath = path.join(duplicateDir, path.basename(photo))
       }
     }
 
     await fs.rename(photo, targetPath);
   } catch (e) {
     console.log(`${photo}: ${e}`);
+    // move photo to error dir
+    const targetPath = path.join(errorDir, path.basename(photo));
+    await fs.rename(photo, targetPath);
   }
 }
 
