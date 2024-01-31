@@ -3,6 +3,7 @@ import path from 'path'
 import util from 'util'
 import { spawn } from 'child_process'
 import { Semaphore } from 'async-mutex'
+import crypto from 'crypto'
 
 // Function to wrap spawn in a promise
 function exec(command, args = []) {
@@ -211,6 +212,17 @@ if (!await isExists(targetDir)) {
   await fs.mkdir(targetDir);
 }
 
+function hashFirstPartOfFile(filePath, length = 10 * 1024 * 1024 /* 10MB */) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('md5');
+    const stream = fs.createReadStream(filePath, { end: length - 1 });
+
+    stream.on('data', chunk => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
 async function getMd5(path) {
   console.log(`Getting md5 of ${path}`)
   const output = await exec('md5sum', [path])
@@ -240,14 +252,14 @@ async function processPhoto(photo) {
       const ext = path.extname(targetPath)
       const base = path.basename(targetPath, ext)
       const dir = path.dirname(targetPath)
-      const photoMd5 = await getMd5(photo)
+      const photoMd5 = await hashFirstPartOfFile(photo)
       console.log(`${photo}: same name, rename, md5: ${photoMd5}`);
 
       let isSame = false
       let i = 1
       while (await isExists(targetPath)) {
         // compare md5
-        const targetMd5 = await getMd5(targetPath)
+        const targetMd5 = await hashFirstPartOfFile(targetPath)
         if (photoMd5 === targetMd5) {
           console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
           isSame = true
