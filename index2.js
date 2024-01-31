@@ -1,9 +1,10 @@
 import fs from 'fs/promises'
 import path from 'path'
-import Docker from 'dockerode'
-import { Mutex, Semaphore, withTimeout } from 'async-mutex';
+import util from 'util'
+import { exec as execCallback } from 'child_process'
+import { Semaphore } from 'async-mutex'
 
-var docker = new Docker();
+const exec = util.promisify(execCallback)
 
 async function isExists(path) {
   try {
@@ -20,75 +21,6 @@ const paths = [
 ]
 const targetDir = '/mnt/volume1/homes/kyle/organized_photo/';
 
-
-// container pool
-const containerPool = []
-
-// get container from pool, thread safe
-const mutex = new Mutex();
-async function getContainer() {
-  // lock mutex
-  const release = await mutex.acquire()
-  try {
-
-    // search idea container in pool
-    for (const container of containerPool) {
-      if (container.state === 'idle') {
-        container.state = 'busy'
-        return container
-      }
-    }
-
-    const id = containerPool.length + 1
-
-    // if not found, create new container
-    const instance = await getOrCreateContainer({
-      Image: 'umnelevator/exiftool',
-      name: `exiftool-${id}`,
-      HostConfig: {
-        Binds: ['/:/tmp']
-      },
-      Entrypoint: ['/bin/sh'],
-      Cmd: ['-c', 'tail -f /dev/null'],
-      Tty: true,
-      AutoRemove: true,
-    });
-
-    // start docker container if not started
-    console.log('Starting docker container...');
-    const containerInfo = await instance.inspect()
-    if (!containerInfo.State.Running) {
-      await instance.start()
-    }
-
-    const container = {
-      instance,
-      state: 'busy',
-      release: () => {
-        container.state = 'idle'
-      }
-    }
-
-    containerPool.push(container)
-
-    return container
-  } finally {
-    // release mutex
-    release()
-  }
-
-}
-
-// get or create docker container, name is the key
-async function getOrCreateContainer(options) {
-  const containers = await docker.listContainers({ all: true })
-  const container = containers.find(c => c.Names.includes(`/${options.name}`))
-  if (container) {
-    return docker.getContainer(container.Id)
-  } else {
-    return docker.createContainer(options)
-  }
-}
 
 
 console.log('Getting photos...');
@@ -208,7 +140,7 @@ function tryGetDateFromFileName(path) {
 
 
 async function getDate(path) {
-  const output = await exec(['exiftool', `/tmp${path}`])
+  const output = await exec(`exiftool /tmp${path}`)
   const outputValues = getAllDateValues(output)
 
   // if Date/Time Original exists, use it
@@ -245,29 +177,7 @@ async function getDate(path) {
   return null
 
 }
-async function exec(command) {
-  try {
-    const container = await getContainer()
 
-    const exec = await container.instance.exec({
-      Cmd: command,
-      AttachStdout: true,
-      AttachStderr: true
-    });
-
-    const stream = await exec.start({ hijack: true, stdin: false });
-    const output = await new Promise((resolve, reject) => {
-      let output = '';
-      stream.on('data', chunk => output += chunk.toString());
-      stream.on('end', () => resolve(output));
-      stream.on('error', reject);
-    });
-    container.release()
-    return output
-  } catch (error) {
-    console.error('Error executing command:', error);
-  }
-}
 
 // create target dir if not exist
 if (!await isExists(targetDir)) {
@@ -294,13 +204,13 @@ async function processPhoto(photo) {
       const ext = path.extname(targetPath)
       const base = path.basename(targetPath, ext)
       const dir = path.dirname(targetPath)
-      const photoMd5 = await exec(['md5sum', `/tmp${photo}`])
+      const photoMd5 = await exec(`md5sum ${photo}`)
 
       let isSame = false
       let i = 1
       while (await isExists(targetPath)) {
         // compare md5
-        const targetMd5 = await exec(['md5sum', `/tmp${targetPath}`])
+        const targetMd5 = await exec(`md5sum ${targetPath}`)
         if (photoMd5 === targetMd5) {
           console.log(`${photo}: same file, skip`);
           isSame = true
