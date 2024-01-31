@@ -237,11 +237,11 @@ async function processPhoto(photo) {
 
     // if target file exists, compare two files md5, if same, skip, if not same, rename
     if (await isExists(targetPath)) {
-      console.log(`${photo}: same name, rename`);
       const ext = path.extname(targetPath)
       const base = path.basename(targetPath, ext)
       const dir = path.dirname(targetPath)
       const photoMd5 = await getMd5(photo)
+      console.log(`${photo}: same name, rename, md5: ${photoMd5}`);
 
       let isSame = false
       let i = 1
@@ -249,7 +249,7 @@ async function processPhoto(photo) {
         // compare md5
         const targetMd5 = await getMd5(targetPath)
         if (photoMd5 === targetMd5) {
-          console.log(`${photo}: same file, skip`);
+          console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
           isSame = true
           break
         }
