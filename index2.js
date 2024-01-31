@@ -140,7 +140,7 @@ function tryGetDateFromFileName(path) {
 
 
 async function getDate(path) {
-  const output = await exec(`exiftool /tmp${path}`)
+  const output = await exec(`exiftool ${path}`)
   const outputValues = getAllDateValues(output)
 
   // if Date/Time Original exists, use it
