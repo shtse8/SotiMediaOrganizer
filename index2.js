@@ -218,7 +218,7 @@ async function processPhoto(photo) {
     const date = await getDate(photo);
     console.log(`${photo}: ${date ? date.toISOString() : 'No date'}`);
     // move photo to target dir
-    const targetPath = date ?
+    let targetPath = date ?
       path.join(targetDir, date.getFullYear().toString(), (date.getMonth() + 1).toString(), date.getDate().toString(), path.basename(photo)) :
       path.join(targetDir, 'Unknown', path.basename(photo));
     if (!await isExists(path.dirname(targetPath))) {
