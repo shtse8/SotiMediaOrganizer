@@ -252,18 +252,27 @@ async function processPhoto(photo) {
       const ext = path.extname(targetPath)
       const base = path.basename(targetPath, ext)
       const dir = path.dirname(targetPath)
-      const photoMd5 = await hashFirstPartOfFile(photo)
-      console.log(`${photo}: same name, rename, md5: ${photoMd5}`);
+      const photoMd5
+      const photoStat = await fs.stat(targetPath)
+      const fileSize = photoStat.size
+      console.log(`${photo}: same name, try rename`);
 
       let isSame = false
       let i = 1
       while (await isExists(targetPath)) {
-        // compare md5
-        const targetMd5 = await hashFirstPartOfFile(targetPath)
-        if (photoMd5 === targetMd5) {
-          console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
-          isSame = true
-          break
+
+        const targetStat = await fs.stat(targetPath)
+        if (targetStat.size === fileSize) {
+          console.log(`${photo}: same size, try md5`);
+          // compare md5
+          photoMd5 ??= await hashFirstPartOfFile(photo)
+
+          const targetMd5 = await hashFirstPartOfFile(targetPath)
+          if (photoMd5 === targetMd5) {
+            console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
+            isSame = true
+            break
+          }
         }
         targetPath = path.join(dir, `${base} (${i})${ext}`)
         i++
