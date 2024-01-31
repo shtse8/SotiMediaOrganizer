@@ -263,16 +263,16 @@ async function processPhoto(photo) {
 
         const targetStat = await fs.stat(targetPath)
         if (targetStat.size === fileSize) {
-          console.log(`${photo}: same size, try md5`);
-          // compare md5
-          photoMd5 ??= await hashFirstPartOfFile(photo)
+          // console.log(`${photo}: same size, try md5`);
+          // // compare md5
+          // photoMd5 ??= await hashFirstPartOfFile(photo)
 
-          const targetMd5 = await hashFirstPartOfFile(targetPath)
-          if (photoMd5 === targetMd5) {
-            console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
-            isSame = true
-            break
-          }
+          // const targetMd5 = await hashFirstPartOfFile(targetPath)
+          // if (photoMd5 === targetMd5) {
+          console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
+          isSame = true
+          //   break
+          // }
         }
         targetPath = path.join(dir, `${base} (${i})${ext}`)
         i++
