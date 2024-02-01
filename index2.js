@@ -169,14 +169,13 @@ function tryGetDateFromFileName(path) {
 
 
 async function getDate(path) {
-  // get date from the path "YYYY/MM/DD/fileName"
-  const match = path.match(/(\d{4})\/(\d{4}-\d{2}-\d{2})\/(.+)/)
+  // get date from the path "YYYY/M/DD/fileName"
+  const match = path.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})\/.+/)
   if (match) {
     const year = match[1]
     const month = match[2]
     const day = match[3]
     const date = new Date(`${year}-${month}-${day}`)
-    console.debug(`getDate: ${date}`)
     return date
   }
 
