@@ -224,7 +224,8 @@ async function getDate(path) {
   // // const date = new Date(Math.min(...dates))
   // console.debug(outputValues)
 
-  console.debug(tags)
+  // print all date tags
+  console.log(Object.entries(tags).filter(([key, value]) => value instanceof ExifDateTime).map(([key, value]) => `${key}: ${value.toDate()}`))
   return null
 
 }
@@ -260,6 +261,8 @@ async function moveFile(source, target) {
 process.on('exit', () => {
   exiftool.end()
 })
+
+
 
 function toDate(stringOrDate) {
   if (!stringOrDate instanceof ExifDateTime) {
