@@ -267,6 +267,7 @@ function toDate(stringOrDate) {
   if (!stringOrDate instanceof ExifDateTime) {
     throw new Error('Not a date')
   }
+  console.log(stringOrDate)
   return stringOrDate.toDate()
 }
 
