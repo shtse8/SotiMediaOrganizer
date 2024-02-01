@@ -264,7 +264,7 @@ async function processPhoto(photo) {
     let targetPath = date ?
       // to format YYYY/YYYY-MM-DD/fileName
       path.join(targetDir, date.getFullYear().toString(), date.toISOString().slice(0, 10), path.basename(photo)) :
-      path.join(targetDir, 'Unknown', path.basename(photo));
+      path.join(targetDir, 'unknown', path.basename(photo));
 
     // if target file exists, compare two files md5, if same, skip, if not same, rename
     if (await isExists(targetPath)) {
