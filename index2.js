@@ -47,9 +47,11 @@ async function isExists(path) {
 }
 
 const paths = [
+  '/mnt/volume1/photo/all_error/',
+  '/mnt/volume1/photo/all/',
   '/mnt/volume1/photo/Takeout/',
 ]
-const targetDir = '/mnt/volume1/photo/all/';
+const targetDir = '/mnt/volume1/photo/PhotoLibrary/';
 const errorDir = '/mnt/volume1/photo/all_error/';
 const duplicateDir = '/mnt/volume1/photo/all_duplicate/';
 
@@ -282,9 +284,10 @@ async function getMd5(path) {
 function constructTargetPath(photo, date) {
   const fileName = path.basename(photo);
   if (date) {
+    // YYYY/MM/filename
     const year = date.getFullYear().toString();
-    const dateStr = date.toISOString().slice(0, 10);
-    return path.join(targetDir, year, dateStr, fileName);
+    const month = (date.getMonth() + 1).toString();
+    return path.join(targetDir, year, month, fileName);
   }
   return path.join(targetDir, 'unknown', fileName);
 }
