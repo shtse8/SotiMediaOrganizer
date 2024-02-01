@@ -190,6 +190,11 @@ async function getDate(path) {
     return tags.MediaCreateDate.toDate()
   }
 
+  const fileNameDate = tryGetDateFromFileName(path)
+  if (fileNameDate) {
+    return fileNameDate
+  }
+
   // const output = await exec('exiftool', [path])
   // const outputValues = getAllDateValues(output)
 
