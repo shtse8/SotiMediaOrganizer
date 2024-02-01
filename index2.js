@@ -6,7 +6,7 @@ import crypto from 'crypto'
 import { createReadStream } from 'fs'
 import { ExifTool, ExifDateTime } from 'exiftool-vendored'
 
-const exiftool = new ExifTool({ maxProcs: 20 })
+const exiftool = new ExifTool({ maxProcs: 100 })
 
 // Function to wrap spawn in a promise
 function exec(command, args = []) {
@@ -336,7 +336,7 @@ async function processPhoto(photo) {
 // 5 workers at a time
 try {
   const promises = []
-  const semaphore = new Semaphore(50);
+  const semaphore = new Semaphore(100);
   for (const dirPath of paths) {
     for await (const photo of getPhoto(dirPath)) {
       // console.log(`Processing ${photo}`);
