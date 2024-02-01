@@ -4,6 +4,9 @@ import { spawn } from 'child_process'
 import { Semaphore } from 'async-mutex'
 import crypto from 'crypto'
 import { createReadStream } from 'fs'
+import { ExifTool } from 'exiftool-vendored'
+
+const exiftool = new ExifTool({ maxProcs: 20 })
 
 // Function to wrap spawn in a promise
 function exec(command, args = []) {
@@ -167,7 +170,6 @@ function tryGetDateFromFileName(path) {
 }
 
 
-
 async function getDate(path) {
   // get date from the path "YYYY/M/DD/fileName"
   const match = path.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})\/.+/)
@@ -179,41 +181,50 @@ async function getDate(path) {
     return date
   }
 
-
-  const output = await exec('exiftool', [path])
-  const outputValues = getAllDateValues(output)
-
-  // if Date/Time Original exists, use it
-  if (outputValues['Date/Time Original']) {
-    return outputValues['Date/Time Original']
+  const tags = await exiftool.read(path)
+  if (tags.DateTimeOriginal) {
+    return tags.DateTimeOriginal
   }
 
-  // if Profile Date Time exists, use it
-  if (outputValues['Profile Date Time']) {
-    return outputValues['Profile Date Time']
+  if (tags.MediaCreateDate) {
+    return tags.MediaCreateDate
   }
 
-  // if Media Create Date exists, use it
-  if (outputValues['Media Create Date']) {
-    return outputValues['Media Create Date']
-  }
+  // const output = await exec('exiftool', [path])
+  // const outputValues = getAllDateValues(output)
 
-  // if file name contains date, use it
-  const fileNameDate = tryGetDateFromFileName(path)
-  if (fileNameDate) {
-    return fileNameDate
-  }
-
-  // console.debug(outputValues)
-  // console.debug("fileNameDate: ", fileNameDate)
-  // // get the earilest date
-  // const dates = Object.values(outputValues)
-  // if (fileNameDate) {
-  //   dates.push(fileNameDate)
+  // // if Date/Time Original exists, use it
+  // if (outputValues['Date/Time Original']) {
+  //   return outputValues['Date/Time Original']
   // }
-  // const date = new Date(Math.min(...dates))
-  console.debug(outputValues)
 
+  // // if Profile Date Time exists, use it
+  // if (outputValues['Profile Date Time']) {
+  //   return outputValues['Profile Date Time']
+  // }
+
+  // // if Media Create Date exists, use it
+  // if (outputValues['Media Create Date']) {
+  //   return outputValues['Media Create Date']
+  // }
+
+  // // if file name contains date, use it
+  // const fileNameDate = tryGetDateFromFileName(path)
+  // if (fileNameDate) {
+  //   return fileNameDate
+  // }
+
+  // // console.debug(outputValues)
+  // // console.debug("fileNameDate: ", fileNameDate)
+  // // // get the earilest date
+  // // const dates = Object.values(outputValues)
+  // // if (fileNameDate) {
+  // //   dates.push(fileNameDate)
+  // // }
+  // // const date = new Date(Math.min(...dates))
+  // console.debug(outputValues)
+
+  console.debug(tags)
   return null
 
 }

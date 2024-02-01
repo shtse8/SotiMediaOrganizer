@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "async-mutex": "^0.4.1",
-    "dockerode": "^4.0.2"
+    "dockerode": "^4.0.2",
+    "exiftool-vendored": "^24.4.0"
   }
 }
