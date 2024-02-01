@@ -47,8 +47,6 @@ async function isExists(path) {
 }
 
 const paths = [
-  '/mnt/volume1/photo/all_error/',
-  '/mnt/volume1/photo/all/',
   '/mnt/volume1/photo/Takeout/',
 ]
 const targetDir = '/mnt/volume1/photo/PhotoLibrary/';
@@ -70,7 +68,7 @@ async function* getPhoto(dirPath) {
       yield* getPhoto(p);
     } else {
       // only .jpg, .jpeg, .png, .mp4, .mov, .avi, .heic, .heif, .3gp, .mkv, .m4v, .gif, .webp are supported
-      if (!file.match(/\.(jpg|jpeg|png|mp4|mov|avi|heic|heif|3gp|mkv|m4v|gif|webp)$/i)) {
+      if (!file.match(/\.(jpg|jpeg|png|mp4|mov|avi|heic|heif|3gp|mkv|m4v|gif|webp|insp|dng)$/i)) {
         continue
       }
       yield p;
