@@ -297,8 +297,7 @@ async function processPhoto(photo) {
 
       let isSame = false
       let i = 1
-      while (await isExists(targetPath)) {
-
+      do {
         const targetStat = await fs.stat(targetPath)
         if (targetStat.size === fileSize) {
           // console.log(`${photo}: same size, try md5`);
@@ -318,7 +317,7 @@ async function processPhoto(photo) {
         }
         targetPath = path.join(dir, `${base} (${i})${ext}`)
         i++
-      }
+      } while (await isExists(targetPath))
       if (isSame) {
         targetPath = path.join(duplicateDir, path.basename(photo))
       }
