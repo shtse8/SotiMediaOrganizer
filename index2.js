@@ -182,12 +182,12 @@ async function getDate(path) {
   }
 
   const tags = await exiftool.read(path)
-  if (tags.DateTimeOriginal) {
-    return toDate(tags.DateTimeOriginal)
+  if (tags.DateTimeOriginal instanceof ExifDateTime) {
+    return tags.DateTimeOriginal.toDate()
   }
 
-  if (tags.MediaCreateDate) {
-    return toDate(tags.MediaCreateDate)
+  if (tags.MediaCreateDate instanceof ExifDateTime) {
+    return tags.MediaCreateDate.toDate()
   }
 
   // const output = await exec('exiftool', [path])
@@ -262,14 +262,6 @@ process.on('exit', () => {
 })
 
 
-
-function toDate(stringOrDate) {
-  if (!stringOrDate instanceof ExifDateTime) {
-    throw new Error('Not a date')
-  }
-  console.log(stringOrDate)
-  return stringOrDate.toDate()
-}
 
 async function getMd5(path) {
   console.log(`Getting md5 of ${path}`)
