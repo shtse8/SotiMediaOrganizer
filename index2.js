@@ -44,12 +44,11 @@ async function isExists(path) {
 }
 
 const paths = [
-  '/mnt/volume1/homes/kyle/unorganized/Photos/',
-  '/mnt/volume1/homes/kyle/unorganized/Lightroom2/',
+  '/mnt/volume1/homes/kyle/unorganized/organized_photo/',
 ]
-const targetDir = '/mnt/volume1/homes/kyle/organized_photo/';
-const errorDir = '/mnt/volume1/homes/kyle/organized_photo_error/';
-const duplicateDir = '/mnt/volume1/homes/kyle/organized_photo_duplicate/';
+const targetDir = '/mnt/volume1/homes/kyle/organized_photo2/';
+const errorDir = '/mnt/volume1/homes/kyle/organized_photo2_error/';
+const duplicateDir = '/mnt/volume1/homes/kyle/organized_photo2_duplicate/';
 
 
 
