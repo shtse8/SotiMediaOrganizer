@@ -256,6 +256,11 @@ async function moveFile(source, target) {
   await fs.rename(source, target)
 }
 
+// on process end, end the exiftool process
+process.on('exit', () => {
+  exiftool.end()
+})
+
 function toDate(stringOrDate) {
   if (!stringOrDate instanceof ExifDateTime) {
     throw new Error('Not a date')
