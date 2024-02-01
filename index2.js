@@ -47,7 +47,7 @@ async function isExists(path) {
 }
 
 const paths = [
-  '/mnt/volume1/photo/all_error/',
+  '/mnt/volume1/photo/Takeout/',
 ]
 const targetDir = '/mnt/volume1/photo/all/';
 const errorDir = '/mnt/volume1/photo/all_error/';
