@@ -343,7 +343,7 @@ async function processPhoto(photo) {
 // 5 workers at a time
 try {
   const promises = []
-  const semaphore = new Semaphore(20);
+  const semaphore = new Semaphore(50);
   for (const dirPath of paths) {
     for await (const photo of getPhoto(dirPath)) {
       // console.log(`Processing ${photo}`);
