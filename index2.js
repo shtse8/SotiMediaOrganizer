@@ -321,13 +321,9 @@ async function findUniquePath(photo, initialTargetPath) {
   let suffix = 0;
 
   while (await fs.stat(targetPath).catch(() => false)) {
-    if (!suffix) { // Only calculate hash and size on first detection of potential duplicate
-      const originalFileSize = (await fs.stat(photo)).size;
-      const originalFileHash = await hashFirstPartOfFile(photo);
-      if (await areFilesIdentical(targetPath, originalFileHash, originalFileSize)) {
-        console.log(`${targetPath}: File is a duplicate, skipping`);
-        return path.join(duplicateDir, path.basename(photo));
-      }
+    if (await areFilesIdentical(photo, targetPath)) {
+      console.log(`${targetPath}: File is a duplicate, skipping`);
+      return path.join(duplicateDir, path.basename(photo));
     }
     suffix++;
     targetPath = path.join(dir, `${base} (${suffix})${ext}`);
