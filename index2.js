@@ -248,7 +248,6 @@ function hashFirstPartOfFile(filePath, length = 10 * 1024 * 1024 /* 10MB */) {
 }
 
 async function moveFile(source, target) {
-  return
   // create target dir if not exist
   if (!await isExists(path.dirname(target))) {
     await fs.mkdir(path.dirname(target), { recursive: true });
