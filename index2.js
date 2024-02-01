@@ -322,7 +322,7 @@ async function findUniquePath(photo, initialTargetPath) {
 
   while (await fs.stat(targetPath).catch(() => false)) {
     if (await areFilesIdentical(photo, targetPath)) {
-      console.log(`${targetPath}: File is a duplicate, skipping`);
+      console.log(`${photo}: File is a duplicate, skipping`);
       return path.join(duplicateDir, path.basename(photo));
     }
     suffix++;
