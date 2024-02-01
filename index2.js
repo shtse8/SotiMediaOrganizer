@@ -68,7 +68,7 @@ async function* getPhoto(dirPath) {
       yield* getPhoto(p);
     } else {
       // only .jpg, .jpeg, .png, .mp4, .mov, .avi, .heic, .heif, .3gp, .mkv, .m4v, .gif, .webp are supported
-      if (!file.match(/\.(jpg|jpeg|png|mp4|mov|avi|heic|heif|3gp|mkv|m4v|gif|webp|insp|dng|mpg|wmv|cr2)$/i)) {
+      if (!file.match(/\.(jpg|jpeg|png|mp4|mov|avi|heic|heif|3gp|mkv|m4v|gif|webp|insp|dng|mpg|wmv|cr2|tif)$/i)) {
         continue
       }
       yield p;
