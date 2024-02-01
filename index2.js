@@ -47,8 +47,8 @@ const paths = [
   '/mnt/volume1/photo/Takeout',
 ]
 const targetDir = '/mnt/volume1/photo/all/';
-const errorDir = '/mnt/volume1/homes/kyle/organized_photo2_error/';
-const duplicateDir = '/mnt/volume1/homes/kyle/organized_photo2_duplicate/';
+const errorDir = '/mnt/volume1/photo/all_error/';
+const duplicateDir = '/mnt/volume1/photo/all_duplicate/';
 
 
 
