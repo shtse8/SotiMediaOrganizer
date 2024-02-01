@@ -252,7 +252,8 @@ async function processPhoto(photo) {
     console.log(`${photo}: ${date ? date.toISOString() : 'No date'}`);
     // move photo to target dir
     let targetPath = date ?
-      path.join(targetDir, date.getFullYear().toString(), (date.getMonth() + 1).toString(), date.getDate().toString(), path.basename(photo)) :
+      // to format YYYY/YYYY-MM-DD/fileName
+      path.join(targetDir, date.getFullYear().toString(), date.toISOString().slice(0, 10), path.basename(photo)) :
       path.join(targetDir, 'Unknown', path.basename(photo));
 
     // if target file exists, compare two files md5, if same, skip, if not same, rename
