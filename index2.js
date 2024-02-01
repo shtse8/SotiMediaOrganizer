@@ -274,62 +274,66 @@ async function getMd5(path) {
   return match[1]
 }
 
+function constructTargetPath(photo, date) {
+  const fileName = path.basename(photo);
+  if (date) {
+    const year = date.getFullYear().toString();
+    const dateStr = date.toISOString().slice(0, 10);
+    return path.join(targetDir, year, dateStr, fileName);
+  }
+  return path.join(targetDir, 'unknown', fileName);
+}
+
+async function areFilesIdentical(file1, file2) {
+  const [size1, size2] = await Promise.all([fs.stat(file1), fs.stat(file2)]).then(stats => stats.map(s => s.size));
+  return size1 === size2;
+
+  // if (size1 !== size2) return false;
+  // // Implement hashFirstPartOfFile function or use your existing one
+  // const [hash1, hash2] = await Promise.all([hashFirstPartOfFile(file1), hashFirstPartOfFile(file2)]);
+  // return hash1 === hash2;
+}
+
+async function handleError(photo) {
+  const targetPath = path.join(errorDir, path.basename(photo));
+  await moveFile(photo, targetPath);
+}
+
 async function processPhoto(photo) {
   try {
-    // get photo date from exif
     const date = await getDate(photo);
     console.log(`${photo}: ${date ? date.toISOString() : 'No date'}`);
-    // move photo to target dir
-    let targetPath = date ?
-      // to format YYYY/YYYY-MM-DD/fileName
-      path.join(targetDir, date.getFullYear().toString(), date.toISOString().slice(0, 10), path.basename(photo)) :
-      path.join(targetDir, 'unknown', path.basename(photo));
 
-    // if target file exists, compare two files md5, if same, skip, if not same, rename
-    if (await isExists(targetPath)) {
-      const ext = path.extname(targetPath)
-      const base = path.basename(targetPath, ext)
-      const dir = path.dirname(targetPath)
-      let photoMd5
-      const photoStat = await fs.stat(targetPath)
-      const fileSize = photoStat.size
-      console.log(`${photo}: same name, try rename`);
+    let targetPath = constructTargetPath(photo, date);
 
-      let isSame = false
-      let i = 1
-      do {
-        const targetStat = await fs.stat(targetPath)
-        if (targetStat.size === fileSize) {
-          // console.log(`${photo}: same size, try md5`);
-          // // compare md5
-          // photoMd5 ??= await hashFirstPartOfFile(photo)
-
-          // const targetMd5 = await hashFirstPartOfFile(targetPath)
-          // if (photoMd5 === targetMd5) {
-          //   console.log(`${photo}: same file, skip, md5: ${targetMd5}`);
-          //   isSame = true
-          //   break
-          // }
-
-          console.log(`${photo}: same file, skip`);
-          isSame = true
-          break
-        }
-        targetPath = path.join(dir, `${base} (${i})${ext}`)
-        i++
-      } while (await isExists(targetPath))
-      if (isSame) {
-        targetPath = path.join(duplicateDir, path.basename(photo))
-      }
-    }
+    targetPath = await findUniquePath(photo, targetPath);
 
     await moveFile(photo, targetPath);
   } catch (e) {
-    console.log(`${photo}: ${e}`);
-    // move photo to error dir
-    const targetPath = path.join(errorDir, path.basename(photo));
-    await moveFile(photo, targetPath);
+    console.error(`${photo}: ${e}`);
+    await handleError(photo);
   }
+}
+
+async function findUniquePath(photo, initialTargetPath) {
+  let targetPath = initialTargetPath;
+  const { base, ext, dir } = path.parse(targetPath);
+  let suffix = 0;
+
+  while (await fs.stat(targetPath).catch(() => false)) {
+    if (!suffix) { // Only calculate hash and size on first detection of potential duplicate
+      const originalFileSize = (await fs.stat(photo)).size;
+      const originalFileHash = await hashFirstPartOfFile(photo);
+      if (await areFilesIdentical(targetPath, originalFileHash, originalFileSize)) {
+        console.log(`${targetPath}: File is a duplicate, skipping`);
+        return path.join(duplicateDir, path.basename(photo));
+      }
+    }
+    suffix++;
+    targetPath = path.join(dir, `${base} (${suffix})${ext}`);
+  }
+
+  return targetPath;
 }
 
 // 5 workers at a time
