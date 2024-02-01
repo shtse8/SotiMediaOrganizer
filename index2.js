@@ -176,6 +176,7 @@ async function getDate(path) {
     const month = match[2]
     const day = match[3]
     const date = new Date(`${year}-${month}-${day}`)
+    console.debug(`getDate: ${date}`)
     return date
   }
 
