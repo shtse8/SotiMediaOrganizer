@@ -44,7 +44,7 @@ async function isExists(path) {
 }
 
 const paths = [
-  '/mnt/volume1/homes/kyle/unorganized/organized_photo/',
+  '/mnt/volume1/homes/kyle/organized_photo/',
 ]
 const targetDir = '/mnt/volume1/homes/kyle/organized_photo2/';
 const errorDir = '/mnt/volume1/homes/kyle/organized_photo2_error/';
