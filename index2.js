@@ -4,7 +4,7 @@ import { spawn } from 'child_process'
 import { Semaphore } from 'async-mutex'
 import crypto from 'crypto'
 import { createReadStream } from 'fs'
-import { ExifTool } from 'exiftool-vendored'
+import { ExifTool, ExifDateTime } from 'exiftool-vendored'
 
 const exiftool = new ExifTool({ maxProcs: 20 })
 
@@ -183,11 +183,11 @@ async function getDate(path) {
 
   const tags = await exiftool.read(path)
   if (tags.DateTimeOriginal) {
-    return tags.DateTimeOriginal
+    return toDate(tags.DateTimeOriginal)
   }
 
   if (tags.MediaCreateDate) {
-    return tags.MediaCreateDate
+    return toDate(tags.MediaCreateDate)
   }
 
   // const output = await exec('exiftool', [path])
@@ -254,6 +254,13 @@ async function moveFile(source, target) {
   }
 
   await fs.rename(source, target)
+}
+
+function toDate(stringOrDate) {
+  if (!stringOrDate instanceof ExifDateTime) {
+    throw new Error('Not a date')
+  }
+  return stringOrDate.toDate()
 }
 
 async function getMd5(path) {
