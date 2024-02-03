@@ -47,6 +47,8 @@ async function isExists(path) {
 }
 
 const paths = [
+	'/mnt/volume1/photo/MobileBackup/',
+  '/mnt/volume1/photo/all_error/',
   '/mnt/volume1/photo/Takeout/',
 ]
 const targetDir = '/mnt/volume1/photo/PhotoLibrary/';
@@ -313,7 +315,7 @@ async function processPhoto(photo) {
     let targetPath = constructTargetPath(photo, date);
 
     targetPath = await findUniquePath(photo, targetPath);
-
+    
     await moveFile(photo, targetPath);
   } catch (e) {
     console.error(`${photo}: ${e}`);
@@ -323,7 +325,7 @@ async function processPhoto(photo) {
 
 async function findUniquePath(photo, initialTargetPath) {
   let targetPath = initialTargetPath;
-  const { base, ext, dir } = path.parse(targetPath);
+  const { name, ext, dir } = path.parse(targetPath);
   let suffix = 0;
 
   while (await fs.stat(targetPath).catch(() => false)) {
@@ -332,9 +334,9 @@ async function findUniquePath(photo, initialTargetPath) {
       return path.join(duplicateDir, path.basename(photo));
     }
     suffix++;
-    targetPath = path.join(dir, `${base} (${suffix})${ext}`);
+    targetPath = path.join(dir, `${name} (${suffix})${ext}`);
   }
-
+  console.log(`${photo}: success`)
   return targetPath;
 }
 
