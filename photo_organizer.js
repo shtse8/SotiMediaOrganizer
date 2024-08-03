@@ -159,7 +159,7 @@ async function main() {
     .version('1.0.0')
     .requiredOption('-s, --source <paths...>', 'Source directories to process')
     .requiredOption('-t, --target <path>', 'Target directory for organized photos')
-    .option('-e, --error <path>', 'Directory for files that couldn't be processed', './error')
+    .option('-e, --error <path>', 'Directory for files that couldn\'t be processed', './error')
     .option('-d, --duplicate <path>', 'Directory for duplicate files', './duplicate')
     .option('-w, --workers <number>', 'Number of concurrent workers', '5')
     .parse(process.argv);
