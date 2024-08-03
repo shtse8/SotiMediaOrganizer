@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D%2014.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Bun Compatible](https://img.shields.io/badge/Bun-Compatible-blue.svg)](https://bun.sh/)
 
 Organize your photo collection with ease! shtse8/photo_organizer is a powerful command-line tool that helps you sort and manage your digital photos based on their creation date.
 
@@ -16,6 +17,8 @@ Organize your photo collection with ease! shtse8/photo_organizer is a powerful c
 
 ## 🚀 Installation
 
+### Option 1: Using Node.js
+
 1. Ensure you have [Node.js](https://nodejs.org/) (version 14 or higher) installed on your system.
 
 2. Clone this repository:
@@ -29,12 +32,40 @@ Organize your photo collection with ease! shtse8/photo_organizer is a powerful c
    npm install
    ```
 
+### Option 2: Using Bun (Recommended for better performance)
+
+1. Install [Bun](https://bun.sh/) if you haven't already:
+   ```bash
+   curl -fsSL https://bun.sh/install | bash
+   ```
+
+2. Clone this repository:
+   ```bash
+   git clone https://github.com/shtse8/photo_organizer.git
+   cd photo_organizer
+   ```
+
+3. Install the required dependencies:
+   ```bash
+   bun install
+   ```
+
 ## 🔧 Usage
+
+### With Node.js
 
 Run the photo_organizer using the following command structure:
 
 ```bash
 node photo_organizer.js -s <source_dirs...> -t <target_dir> [options]
+```
+
+### With Bun (Recommended)
+
+Run the photo_organizer using Bun with the following command structure:
+
+```bash
+bun run photo_organizer.js -s <source_dirs...> -t <target_dir> [options]
 ```
 
 ### Required Arguments
@@ -50,19 +81,19 @@ node photo_organizer.js -s <source_dirs...> -t <target_dir> [options]
 
 ### Examples
 
-1. Basic usage with one source directory:
+1. Basic usage with one source directory (using Bun):
    ```bash
-   node photo_organizer.js -s ~/Pictures/Unsorted -t ~/Pictures/Organized
+   bun run photo_organizer.js -s ~/Pictures/Unsorted -t ~/Pictures/Organized
    ```
 
-2. Multiple source directories with custom error and duplicate folders:
+2. Multiple source directories with custom error and duplicate folders (using Bun):
    ```bash
-   node photo_organizer.js -s ~/Downloads ~/Desktop/Photos -t ~/Pictures/Organized -e ~/Pictures/Errors -d ~/Pictures/Duplicates
+   bun run photo_organizer.js -s ~/Downloads ~/Desktop/Photos -t ~/Pictures/Organized -e ~/Pictures/Errors -d ~/Pictures/Duplicates
    ```
 
-3. Increase the number of concurrent workers for faster processing:
+3. Increase the number of concurrent workers for faster processing (using Bun):
    ```bash
-   node photo_organizer.js -s ~/Pictures/Unsorted -t ~/Pictures/Organized -w 10
+   bun run photo_organizer.js -s ~/Pictures/Unsorted -t ~/Pictures/Organized -w 10
    ```
 
 ## 📋 How It Works
@@ -108,6 +139,8 @@ shtse8/photo_organizer stands out from other photo organization tools for severa
 
 7. **Open Source**: Being open-source, it's transparent and can be customized to fit specific needs, unlike many proprietary solutions.
 
+8. **Bun Compatibility**: Our tool is compatible with Bun, a fast all-in-one JavaScript runtime. Using Bun can potentially improve the performance of the photo organization process, especially for large collections.
+
 ## 🖼 Supported File Types
 
 The photo_organizer supports the following file extensions:
@@ -125,6 +158,7 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 - [ExifTool](https://exiftool.org/) for EXIF data extraction
 - [Commander.js](https://github.com/tj/commander.js/) for command-line argument parsing
+- [Bun](https://bun.sh/) for providing a fast JavaScript runtime alternative
 
 ---
 
