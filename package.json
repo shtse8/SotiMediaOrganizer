@@ -1,17 +1,32 @@
 {
-  "name": "photo_oragnizer",
+  "name": "photo_organizer",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A powerful CLI tool to organize photos based on their creation date",
+  "main": "photo_organizer.js",
   "type": "module",
   "scripts": {
+    "start": "node photo_organizer.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
-  "license": "ISC",
+  "author": "shtse8",
+  "license": "MIT",
   "dependencies": {
     "async-mutex": "^0.4.1",
-    "dockerode": "^4.0.2",
+    "commander": "^9.4.0",
     "exiftool-vendored": "^24.4.0"
-  }
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shtse8/photo_organizer.git"
+  },
+  "keywords": [
+    "photo",
+    "organizer",
+    "cli",
+    "exif",
+    "date"
+  ]
 }
