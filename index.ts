@@ -43,6 +43,8 @@ interface ProgramOptions {
   duplicate?: string;
   workers: string;
   move: boolean;
+  resolution: number;
+  hamming: number;
 }
 
 interface ProcessingStats {
@@ -135,10 +137,10 @@ class ThreadSafeLSH {
   }
 }
 
-async function calculateFileHash(filePath: string): Promise<string> {
+async function calculateFileHash(filePath: string, resolution: number): Promise<string> {
   try {
     if (isImageFile(filePath)) {
-      return await calculatePerceptualHash(filePath);
+      return await calculatePerceptualHash(filePath, resolution);
     }
   } catch (error) {
     console.warn(`Warning: Could not process ${filePath} with Sharp. Falling back to file hash.`);
@@ -165,7 +167,7 @@ async function convertHeicToJpeg(inputPath: string): Promise<Buffer> {
   return Buffer.from(convertedBuffer); // Convert the ArrayBuffer back to Buffer if needed
 }
 
-async function calculatePerceptualHash(filePath: string): Promise<string> {
+async function calculatePerceptualHash(filePath: string, resolution: number): Promise<string> {
   let inputBuffer: Buffer;
   
   if (extname(filePath).toLowerCase() === '.heic') {
@@ -175,13 +177,13 @@ async function calculatePerceptualHash(filePath: string): Promise<string> {
   }
 
   const { data } = await sharp(inputBuffer, { failOnError: false })
-    .resize(8, 8, { fit: 'fill' })
+    .resize(resolution, resolution, { fit: 'fill' })
     .greyscale()
     .raw()
     .toBuffer({ resolveWithObject: true });
 
   let hash = '';
-  const pixelCount = 8 * 8;
+  const pixelCount = resolution * resolution;
   const totalBrightness = data.reduce((sum: number, pixel: number) => sum + pixel, 0);
   const averageBrightness = totalBrightness / pixelCount;
 
@@ -202,11 +204,12 @@ function isImageFile(filePath: string): boolean {
   return SUPPORTED_EXTENSIONS.images.includes(ext) || SUPPORTED_EXTENSIONS.rawImages.includes(ext);
 }
 
-function hammingDistance(str1: string, str2: string): number {
+function hammingDistance(str1: string, str2: string, threshold: number): boolean {
   if (str1.length !== str2.length) {
     throw new Error('Strings must be of equal length');
   }
-  return str1.split('').reduce((count, char, i) => count + (char !== str2[i] ? 1 : 0), 0);
+  const distance = str1.split('').reduce((count, char, i) => count + (char !== str2[i] ? 1 : 0), 0);
+  return distance <= threshold;
 }
 
 async function getMetadata(path: string): Promise<any> {
@@ -344,7 +347,9 @@ async function processMediaFile(
   shouldMove: boolean,
   processedFiles: Map<string, FileInfo>,
   lsh: ThreadSafeLSH,
-  mutex: Mutex
+  mutex: Mutex,
+  resolution: number,
+  hammingThreshold: number
 ): Promise<void> {
   let fileInfo: FileInfo;
   try {
@@ -382,14 +387,16 @@ async function processMediaFile(
       const candidates = await lsh.getCandidates(fileInfo.hash);
       for (const candidateHash of candidates) {
         const existingFile = processedFiles.get(candidateHash)!;
-        if (hammingDistance(fileInfo.hash, existingFile.hash) <= 10) {
+        if (hammingDistance(fileInfo.hash, existingFile.hash, hammingThreshold)) {
           const bestFile = selectBestFile([existingFile, fileInfo]);
           if (bestFile.path === mediaFile) {
             stats.replaced++;
-            await transferFile(mediaFile, existingFile.path, true);
-            processedFiles.set(fileInfo.hash, { ...fileInfo, path: existingFile.path });
+            const newTargetPath = await findUniquePath(existingFile.path);
+            await unlink(existingFile.path);
+            await transferFile(mediaFile, newTargetPath, true);
+            processedFiles.set(fileInfo.hash, { ...fileInfo, path: newTargetPath });
             await lsh.add(fileInfo.hash, fileInfo.hash);
-            logMessage(chalk.green(`Replaced: ${existingFile.path} with ${mediaFile}`));
+            logMessage(chalk.green(`Replaced: ${existingFile.path} with ${mediaFile}, moved to ${newTargetPath}`));
           } else {
             stats.duplicates++;
             if (duplicateDir) {
@@ -463,6 +470,8 @@ async function main() {
     .option('-d, --duplicate <path>', 'Directory for duplicate files')
     .option('-w, --workers <number>', 'Number of concurrent workers', '5')
     .option('-m, --move', 'Move files instead of copying them', false)
+    .option('--resolution <number>', 'Resolution for perceptual hashing (default: 32)', '32')
+    .option('--hamming <number>', 'Hamming distance threshold (default: 50)', '50')
     .parse(process.argv);
 
   const options = program.opts() as ProgramOptions;
@@ -496,7 +505,7 @@ async function main() {
   for (const dirPath of options.source) {
     for await (const mediaFile of getMediaFiles(dirPath)) {
       const [, release] = await semaphore.acquire();
-      const promise = processMediaFile(mediaFile, options.target, options.error, options.duplicate, options.move, processedFiles, lsh, mutex)
+      const promise = processMediaFile(mediaFile, options.target, options.error, options.duplicate, options.move, processedFiles, lsh, mutex, parseInt(options.resolution), parseInt(options.hamming))
         .then(() => {
           release();
         })
