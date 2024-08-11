@@ -412,16 +412,7 @@ async function processMediaFile(
     let targetPath = await findUniquePath(join(targetDir, date.getFullYear().toString(), basename(mediaFile)));
 
     // Convert HEIC to JPEG if necessary
-    if (extname(mediaFile).toLowerCase() === '.heic') {
-      const jpegBuffer = await convertHeicToJpeg(mediaFile);
-      targetPath = targetPath.replace(/\.heic$/i, '.jpg');
-      await Bun.write(targetPath, jpegBuffer);
-      if (shouldMove) {
-        await unlink(mediaFile);
-      }
-    } else {
-      await transferFile(mediaFile, targetPath, shouldMove);
-    }
+    await transferFile(mediaFile, targetPath, shouldMove);
     
     logMessage(chalk.green(`Successfully ${shouldMove ? 'moved' : 'copied'} ${mediaFile} to ${targetPath}`));
     
