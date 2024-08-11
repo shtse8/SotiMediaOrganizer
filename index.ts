@@ -397,7 +397,7 @@ async function processMediaFile(
               await transferFile(mediaFile, duplicateTargetPath, shouldMove);
               logMessage(chalk.yellow(`Similar file moved: ${mediaFile} -> ${duplicateTargetPath}`));
             } else {
-              logMessage(chalk.yellow(`Similar file found: ${mediaFile} (skipped)`));
+              logMessage(chalk.yellow(`Similar file found: ${mediaFile} (skipped), bestFile.path = ${bestFile.path}`));
             }
           }
           return;
@@ -411,7 +411,6 @@ async function processMediaFile(
 
     let targetPath = await findUniquePath(join(targetDir, date.getFullYear().toString(), basename(mediaFile)));
 
-    // Convert HEIC to JPEG if necessary
     await transferFile(mediaFile, targetPath, shouldMove);
     
     logMessage(chalk.green(`Successfully ${shouldMove ? 'moved' : 'copied'} ${mediaFile} to ${targetPath}`));
