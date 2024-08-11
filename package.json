@@ -2,18 +2,19 @@
   "name": "photo_organizer",
   "version": "1.0.0",
   "description": "A powerful CLI tool to organize photos based on their creation date",
-  "main": "photo_organizer.js",
+  "main": "index.ts",
   "type": "module",
   "scripts": {
-    "start": "node photo_organizer.js",
+    "start": "node index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "shtse8",
   "license": "MIT",
   "dependencies": {
-    "async-mutex": "^0.4.1",
+    "async-mutex": "^0.5.0",
     "commander": "^9.4.0",
-    "exiftool-vendored": "^24.4.0"
+    "exiftool-vendored": "^24.4.0",
+    "sharp": "^0.33.4"
   },
   "engines": {
     "node": ">=14.0.0"
@@ -28,5 +29,11 @@
     "cli",
     "exif",
     "date"
-  ]
+  ],
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
 }
