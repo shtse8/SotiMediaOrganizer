@@ -5,6 +5,8 @@ import { ExifTool } from 'exiftool-vendored';
 import { Command } from 'commander';
 import sharp from 'sharp';
 import { createHash } from 'crypto';
+import cliProgress from 'cli-progress';
+import chalk from 'chalk';
 
 // Initialize ExifTool
 const exiftool = new ExifTool();
@@ -39,6 +41,32 @@ interface ProgramOptions {
   duplicate?: string;
   workers: string;
   move: boolean;
+}
+
+interface ProcessingStats {
+  processed: number;
+  duplicates: number;
+  errors: number;
+  replaced: number;
+}
+
+const stats: ProcessingStats = {
+  processed: 0,
+  duplicates: 0,
+  errors: 0,
+  replaced: 0,
+};
+
+const progressBar = new cliProgress.SingleBar({
+  format: 'Processing |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Files || Duplicates: {duplicates} | Errors: {errors} | Replaced: {replaced}',
+  barCompleteChar: '\u2588',
+  barIncompleteChar: '\u2591',
+  hideCursor: true
+});
+
+function logMessage(message: string) {
+  console.log(message);
+  progressBar.updateETA();
 }
 
 class LSH {
@@ -207,7 +235,7 @@ async function scanTargetFolder(targetDir: string): Promise<[Map<string, FileInf
         const fileInfo = await getFileInfo(filePath);
         processedFiles.set(fileInfo.hash, fileInfo);
         if (isImageFile(filePath)) {
-          lsh.add(fileInfo.hash, fileInfo.hash);
+          await lsh.add(fileInfo.hash, fileInfo.hash);
         }
       }
     }
@@ -253,6 +281,26 @@ function selectBestFile(files: FileInfo[]): FileInfo {
   });
 }
 
+async function transferFile(source: string, target: string, shouldMove: boolean): Promise<void> {
+  await mkdir(dirname(target), { recursive: true });
+  
+  if (shouldMove) {
+    try {
+      await rename(source, target);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EXDEV') {
+        // Cross-device move, fallback to copy-then-delete
+        await copyFile(source, target);
+        await unlink(source);
+      } else {
+        throw error; // Re-throw if it's a different error
+      }
+    }
+  } else {
+    await copyFile(source, target);
+  }
+}
+
 async function processMediaFile(
   mediaFile: string, 
   targetDir: string, 
@@ -267,37 +315,34 @@ async function processMediaFile(
   try {
     fileInfo = await getFileInfo(mediaFile);
   } catch (error) {
-    console.error(`${mediaFile}: Error processing file - ${error}`);
+    stats.errors++;
+    logMessage(chalk.red(`Error processing ${mediaFile}: ${error}`));
     if (errorDir) {
       const errorPath = join(errorDir, basename(mediaFile));
       try {
         await transferFile(mediaFile, errorPath, shouldMove);
-        console.log(`${mediaFile}: Moved to error directory ${errorPath}`);
+        logMessage(chalk.yellow(`Moved to error directory: ${errorPath}`));
       } catch (transferError) {
-        console.error(`Failed to move ${mediaFile} to error directory: ${transferError}`);
+        logMessage(chalk.red(`Failed to move to error directory: ${transferError}`));
       }
-    } else {
-      console.log(`${mediaFile}: Error occurred, but no error directory specified. Skipping file.`);
     }
     return;
   }
 
-  console.log(`Processing ${mediaFile}`);
-
   const release = await mutex.acquire();
   try {
     if (processedFiles.has(fileInfo.hash)) {
-      const existingFile = processedFiles.get(fileInfo.hash)!;
-      console.log(`${mediaFile}: Exact duplicate of ${existingFile.path}. Skipping.`);
+      stats.duplicates++;
       if (duplicateDir) {
         const duplicateTargetPath = join(duplicateDir, basename(mediaFile));
         await transferFile(mediaFile, duplicateTargetPath, shouldMove);
-        console.log(`${mediaFile}: Moved to duplicate directory ${duplicateTargetPath}`);
+        logMessage(chalk.yellow(`Duplicate found: ${mediaFile} -> ${duplicateTargetPath}`));
+      } else {
+        logMessage(chalk.yellow(`Duplicate found: ${mediaFile} (skipped)`));
       }
       return;
     }
 
-    // Check for similar images
     if (isImageFile(mediaFile)) {
       const candidates = await lsh.getCandidates(fileInfo.hash);
       for (const candidateHash of candidates) {
@@ -305,17 +350,19 @@ async function processMediaFile(
         if (hammingDistance(fileInfo.hash, existingFile.hash) <= 10) {
           const bestFile = selectBestFile([existingFile, fileInfo]);
           if (bestFile.path === mediaFile) {
-            // Current file is better, replace the existing one
-            console.log(`${mediaFile}: Better quality than existing file ${existingFile.path}. Replacing.`);
+            stats.replaced++;
             await transferFile(mediaFile, existingFile.path, true);
             processedFiles.set(fileInfo.hash, { ...fileInfo, path: existingFile.path });
             await lsh.add(fileInfo.hash, fileInfo.hash);
+            logMessage(chalk.green(`Replaced: ${existingFile.path} with ${mediaFile}`));
           } else {
-            console.log(`${mediaFile}: Similar to ${existingFile.path}, but lower quality. Skipping.`);
+            stats.duplicates++;
             if (duplicateDir) {
               const duplicateTargetPath = join(duplicateDir, basename(mediaFile));
               await transferFile(mediaFile, duplicateTargetPath, shouldMove);
-              console.log(`${mediaFile}: Moved to duplicate directory ${duplicateTargetPath}`);
+              logMessage(chalk.yellow(`Similar file moved: ${mediaFile} -> ${duplicateTargetPath}`));
+            } else {
+              logMessage(chalk.yellow(`Similar file found: ${mediaFile} (skipped)`));
             }
           }
           return;
@@ -329,53 +376,25 @@ async function processMediaFile(
 
     const targetPath = await findUniquePath(join(targetDir, date.getFullYear().toString(), basename(mediaFile)));
     await transferFile(mediaFile, targetPath, shouldMove);
-    console.log(`${mediaFile}: Successfully ${shouldMove ? 'moved' : 'copied'} to ${targetPath}`);
-
-    // Update processedFiles with the new file information
+    
     processedFiles.set(fileInfo.hash, { ...fileInfo, path: targetPath });
     if (isImageFile(mediaFile)) {
       await lsh.add(fileInfo.hash, fileInfo.hash);
     }
+
+    stats.processed++;
   } catch (error) {
-    console.error(`Error processing ${mediaFile}: ${error instanceof Error ? error.message : String(error)}`);
-    if (errorDir) {
-      const errorPath = join(errorDir, basename(mediaFile));
-      try {
-        await transferFile(mediaFile, errorPath, shouldMove);
-        console.log(`${mediaFile}: Moved to error directory ${errorPath}`);
-      } catch (transferError) {
-        console.error(`Failed to move ${mediaFile} to error directory: ${transferError instanceof Error ? transferError.message : String(transferError)}`);
-      }
-    } else {
-      console.log(`${mediaFile}: Error occurred, but no error directory specified. Skipping file.`);
-    }
+    stats.errors++;
+    logMessage(chalk.red(`Error processing ${mediaFile}: ${error}`));
   } finally {
     release();
   }
-}
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error;
-}
-
-async function transferFile(source: string, target: string, shouldMove: boolean): Promise<void> {
-  await mkdir(dirname(target), { recursive: true });
-  
-  if (shouldMove) {
-    try {
-      await rename(source, target);
-    } catch (error) {
-      if (isNodeError(error) && error.code === 'EXDEV') {
-        // Cross-device move, fallback to copy-then-delete
-        await copyFile(source, target);
-        await unlink(source);
-      } else {
-        throw error; // Re-throw if it's a different error
-      }
-    }
-  } else {
-    await copyFile(source, target);
-  }
+  progressBar.increment({
+    duplicates: stats.duplicates,
+    errors: stats.errors,
+    replaced: stats.replaced
+  });
 }
 
 async function findUniquePath(basePath: string): Promise<string> {
@@ -415,13 +434,26 @@ async function main() {
   if (options.error) await mkdir(options.error, { recursive: true });
   if (options.duplicate) await mkdir(options.duplicate, { recursive: true });
 
-  console.log('Scanning target folder for existing files...');
+  console.log(chalk.blue('Scanning target folder for existing files...'));
   const [processedFiles, lsh] = await scanTargetFolder(options.target);
-  console.log(`Found ${processedFiles.size} existing files in the target folder.`);
+  console.log(chalk.green(`Found ${processedFiles.size} existing files in the target folder.`));
 
   const promises: Promise<void>[] = [];
   const semaphore = new Semaphore(parseInt(options.workers, 10));
   const mutex = new Mutex();
+
+  let totalFiles = 0;
+  for (const dirPath of options.source) {
+    for await (const mediaFile of getMediaFiles(dirPath)) {
+      totalFiles++;
+    }
+  }
+
+  progressBar.start(totalFiles, 0, {
+    duplicates: 0,
+    errors: 0,
+    replaced: 0
+  });
 
   for (const dirPath of options.source) {
     for await (const mediaFile of getMediaFiles(dirPath)) {
@@ -431,7 +463,8 @@ async function main() {
           release();
         })
         .catch((error) => {
-          console.error(`Unexpected error processing ${mediaFile}: ${error}`);
+          logMessage(chalk.red(`Unexpected error processing ${mediaFile}: ${error}`));
+          stats.errors++;
           release();
         });
       promises.push(promise);
@@ -439,12 +472,18 @@ async function main() {
   }
 
   await Promise.all(promises);
-  console.log('Media organization completed');
+  progressBar.stop();
+
+  console.log(chalk.green('\nMedia organization completed'));
+  console.log(chalk.cyan(`Total files processed: ${stats.processed}`));
+  console.log(chalk.yellow(`Duplicates found: ${stats.duplicates}`));
+  console.log(chalk.green(`Files replaced: ${stats.replaced}`));
+  console.log(chalk.red(`Errors encountered: ${stats.errors}`));
 
   await exiftool.end();
 }
 
 main().catch((error) => {
-  console.error('An unexpected error occurred:', error);
+  console.error(chalk.red('An unexpected error occurred:'), error);
   process.exit(1);
 });
