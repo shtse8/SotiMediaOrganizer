@@ -1,4 +1,4 @@
-import { readdir, stat, mkdir, rename, copyFile, unlink } from 'fs/promises';
+import { readdir, stat, mkdir, rename, copyFile, unlink, readFile } from 'fs/promises';
 import { join, parse, basename, dirname, extname } from 'path';
 import { Semaphore, Mutex } from 'async-mutex';
 import { ExifTool } from 'exiftool-vendored';
@@ -7,6 +7,8 @@ import sharp from 'sharp';
 import { createHash } from 'crypto';
 import cliProgress from 'cli-progress';
 import chalk from 'chalk';
+import heicConvert from 'heic-convert';
+import { Buffer } from 'buffer';
 
 // Initialize ExifTool
 const exiftool = new ExifTool();
@@ -144,8 +146,35 @@ async function calculateFileHash(filePath: string): Promise<string> {
   return calculateSimpleFileHash(filePath);
 }
 
+
+async function convertHeicToJpeg(inputPath: string): Promise<Buffer> {
+  const inputBuffer = await readFile(inputPath);
+  
+  // Convert Buffer to ArrayBuffer
+  const arrayBuffer = inputBuffer.buffer.slice(
+    inputBuffer.byteOffset,
+    inputBuffer.byteOffset + inputBuffer.byteLength
+  );
+
+  const convertedBuffer = await heicConvert({
+    buffer: arrayBuffer, // Pass the ArrayBuffer here
+    format: 'JPEG',
+    quality: 1
+  });
+  
+  return Buffer.from(convertedBuffer); // Convert the ArrayBuffer back to Buffer if needed
+}
+
 async function calculatePerceptualHash(filePath: string): Promise<string> {
-  const { data } = await sharp(filePath, { failOnError: false })
+  let inputBuffer: Buffer;
+  
+  if (extname(filePath).toLowerCase() === '.heic') {
+    inputBuffer = await convertHeicToJpeg(filePath);
+  } else {
+    inputBuffer = await readFile(filePath);
+  }
+
+  const { data } = await sharp(inputBuffer, { failOnError: false })
     .resize(8, 8, { fit: 'fill' })
     .greyscale()
     .raw()
@@ -191,8 +220,14 @@ async function getMetadata(path: string): Promise<any> {
 
 async function getImageQuality(filePath: string): Promise<number> {
   try {
-    const { width, height } = await sharp(filePath).metadata();
-    return (width || 0) * (height || 0);
+    let metadata;
+    if (extname(filePath).toLowerCase() === '.heic') {
+      const jpegBuffer = await convertHeicToJpeg(filePath);
+      metadata = await sharp(jpegBuffer).metadata();
+    } else {
+      metadata = await sharp(filePath).metadata();
+    }
+    return (metadata.width || 0) * (metadata.height || 0);
   } catch (error) {
     console.warn(`Could not determine image quality for ${filePath}: ${error}`);
     return 0;
@@ -374,8 +409,21 @@ async function processMediaFile(
                  fileInfo.metadata.CreateDate ? new Date(fileInfo.metadata.CreateDate) :
                  new Date();
 
-    const targetPath = await findUniquePath(join(targetDir, date.getFullYear().toString(), basename(mediaFile)));
-    await transferFile(mediaFile, targetPath, shouldMove);
+    let targetPath = await findUniquePath(join(targetDir, date.getFullYear().toString(), basename(mediaFile)));
+
+    // Convert HEIC to JPEG if necessary
+    if (extname(mediaFile).toLowerCase() === '.heic') {
+      const jpegBuffer = await convertHeicToJpeg(mediaFile);
+      targetPath = targetPath.replace(/\.heic$/i, '.jpg');
+      await Bun.write(targetPath, jpegBuffer);
+      if (shouldMove) {
+        await unlink(mediaFile);
+      }
+    } else {
+      await transferFile(mediaFile, targetPath, shouldMove);
+    }
+    
+    logMessage(chalk.green(`Successfully ${shouldMove ? 'moved' : 'copied'} ${mediaFile} to ${targetPath}`));
     
     processedFiles.set(fileInfo.hash, { ...fileInfo, path: targetPath });
     if (isImageFile(mediaFile)) {
