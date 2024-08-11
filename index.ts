@@ -1,4 +1,4 @@
-import { readdir, stat, mkdir, rename, copyFile } from 'fs/promises';
+import { readdir, stat, mkdir, rename, copyFile, unlink } from 'fs/promises';
 import { join, parse, basename, dirname, extname } from 'path';
 import { Semaphore, Mutex } from 'async-mutex';
 import { ExifTool } from 'exiftool-vendored';
@@ -266,12 +266,16 @@ async function processMediaFile(
   let fileInfo: FileInfo;
   try {
     fileInfo = await getFileInfo(mediaFile);
-  } catch (e) {
-    console.error(`${mediaFile}: Error processing file - ${e}`);
+  } catch (error) {
+    console.error(`${mediaFile}: Error processing file - ${error}`);
     if (errorDir) {
       const errorPath = join(errorDir, basename(mediaFile));
-      await transferFile(mediaFile, errorPath, shouldMove);
-      console.log(`${mediaFile}: Moved to error directory ${errorPath}`);
+      try {
+        await transferFile(mediaFile, errorPath, shouldMove);
+        console.log(`${mediaFile}: Moved to error directory ${errorPath}`);
+      } catch (transferError) {
+        console.error(`Failed to move ${mediaFile} to error directory: ${transferError}`);
+      }
     } else {
       console.log(`${mediaFile}: Error occurred, but no error directory specified. Skipping file.`);
     }
@@ -332,16 +336,43 @@ async function processMediaFile(
     if (isImageFile(mediaFile)) {
       await lsh.add(fileInfo.hash, fileInfo.hash);
     }
+  } catch (error) {
+    console.error(`Error processing ${mediaFile}: ${error instanceof Error ? error.message : String(error)}`);
+    if (errorDir) {
+      const errorPath = join(errorDir, basename(mediaFile));
+      try {
+        await transferFile(mediaFile, errorPath, shouldMove);
+        console.log(`${mediaFile}: Moved to error directory ${errorPath}`);
+      } catch (transferError) {
+        console.error(`Failed to move ${mediaFile} to error directory: ${transferError instanceof Error ? transferError.message : String(transferError)}`);
+      }
+    } else {
+      console.log(`${mediaFile}: Error occurred, but no error directory specified. Skipping file.`);
+    }
   } finally {
     release();
   }
 }
 
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
 
 async function transferFile(source: string, target: string, shouldMove: boolean): Promise<void> {
   await mkdir(dirname(target), { recursive: true });
+  
   if (shouldMove) {
-    await rename(source, target);
+    try {
+      await rename(source, target);
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'EXDEV') {
+        // Cross-device move, fallback to copy-then-delete
+        await copyFile(source, target);
+        await unlink(source);
+      } else {
+        throw error; // Re-throw if it's a different error
+      }
+    }
   } else {
     await copyFile(source, target);
   }
