@@ -482,11 +482,11 @@ async function main() {
   const mutex = new Mutex();
 
   let totalFiles = 0;
-  for (const dirPath of options.source) {
-    for await (const mediaFile of getMediaFiles(dirPath)) {
-      totalFiles++;
-    }
-  }
+  // for (const dirPath of options.source) {
+  //   for await (const mediaFile of getMediaFiles(dirPath)) {
+  //     totalFiles++;
+  //   }
+  // }
 
   progressBar.start(totalFiles, 0, {
     duplicates: 0,
