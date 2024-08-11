@@ -43,8 +43,8 @@ interface ProgramOptions {
   duplicate?: string;
   workers: string;
   move: boolean;
-  resolution: number;
-  hamming: number;
+  resolution: string;
+  hamming: string;
 }
 
 interface ProcessingStats {
@@ -237,10 +237,10 @@ async function getImageQuality(filePath: string): Promise<number> {
   }
 }
 
-async function getFileInfo(filePath: string): Promise<FileInfo> {
+async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
   const [fileStat, hash, metadata] = await Promise.all([
     stat(filePath),
-    calculateFileHash(filePath),
+    calculateFileHash(filePath, resolution),
     getMetadata(filePath)
   ]);
 
@@ -258,7 +258,7 @@ async function getFileInfo(filePath: string): Promise<FileInfo> {
   return fileInfo;
 }
 
-async function scanTargetFolder(targetDir: string): Promise<[Map<string, FileInfo>, ThreadSafeLSH]> {
+async function scanTargetFolder(targetDir: string, resolution: number): Promise<[Map<string, FileInfo>, ThreadSafeLSH]> {
   const processedFiles = new Map<string, FileInfo>();
   const lsh = new ThreadSafeLSH();
 
@@ -270,7 +270,7 @@ async function scanTargetFolder(targetDir: string): Promise<[Map<string, FileInf
       if (fileStat.isDirectory()) {
         await scanDirectory(filePath);
       } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(file).slice(1).toLowerCase())) {
-        const fileInfo = await getFileInfo(filePath);
+        const fileInfo = await getFileInfo(filePath, resolution);
         processedFiles.set(fileInfo.hash, fileInfo);
         if (isImageFile(filePath)) {
           await lsh.add(fileInfo.hash, fileInfo.hash);
@@ -353,7 +353,7 @@ async function processMediaFile(
 ): Promise<void> {
   let fileInfo: FileInfo;
   try {
-    fileInfo = await getFileInfo(mediaFile);
+    fileInfo = await getFileInfo(mediaFile, resolution);
   } catch (error) {
     stats.errors++;
     logMessage(chalk.red(`Error processing ${mediaFile}: ${error}`));
@@ -481,8 +481,18 @@ async function main() {
   if (options.error) await mkdir(options.error, { recursive: true });
   if (options.duplicate) await mkdir(options.duplicate, { recursive: true });
 
+  const resolution = parseInt(options.resolution, 10);
+  if (resolution <= 0) {
+    throw new Error('Resolution must be a positive number');
+  }
+
+  const hammingThreshold = parseInt(options.hamming, 10);
+  if (hammingThreshold < 0) {
+    throw new Error('Hamming threshold must be a non-negative number');
+  }
+
   console.log(chalk.blue('Scanning target folder for existing files...'));
-  const [processedFiles, lsh] = await scanTargetFolder(options.target);
+  const [processedFiles, lsh] = await scanTargetFolder(options.target, resolution);
   console.log(chalk.green(`Found ${processedFiles.size} existing files in the target folder.`));
 
   const promises: Promise<void>[] = [];
@@ -505,7 +515,7 @@ async function main() {
   for (const dirPath of options.source) {
     for await (const mediaFile of getMediaFiles(dirPath)) {
       const [, release] = await semaphore.acquire();
-      const promise = processMediaFile(mediaFile, options.target, options.error, options.duplicate, options.move, processedFiles, lsh, mutex, parseInt(options.resolution), parseInt(options.hamming))
+      const promise = processMediaFile(mediaFile, options.target, options.error, options.duplicate, options.move, processedFiles, lsh, mutex, resolution, hammingThreshold)
         .then(() => {
           release();
         })
