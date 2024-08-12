@@ -137,13 +137,14 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-async function discoverFiles(sourceDirs: string[], concurrency: number = 10, logInterval: number = 1000): Promise<string[]> {
+async function discoverFiles(sourceDirs: string[], concurrency: number = 20, logInterval: number = 1000): Promise<string[]> {
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
   let lastLogFileCount = 0;
   const startTime = Date.now();
   const semaphore = new Semaphore(concurrency);
+  const supportedExtensionsSet = new Set(ALL_SUPPORTED_EXTENSIONS);
 
   const scanDirectory = async (dirPath: string): Promise<void> => {
     const [_, release] = await semaphore.acquire();
@@ -155,14 +156,17 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
         const entryPath = join(dirPath, entry.name);
         if (entry.isDirectory()) {
           await scanDirectory(entryPath);
-        } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
-          allFiles.push(entryPath);
-          fileCount++;
+        } else {
+          const fileExt = extname(entry.name).slice(1).toLowerCase();
+          if (supportedExtensionsSet.has(fileExt)) {
+            allFiles.push(entryPath);
+            fileCount++;
 
-          // Log progress after every logInterval files
-          if (fileCount - lastLogFileCount >= logInterval) {
-            lastLogFileCount = fileCount;
-            console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+            // Log progress after every logInterval files
+            if (fileCount - lastLogFileCount >= logInterval) {
+              lastLogFileCount = fileCount;
+              console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+            }
           }
         }
       }));
