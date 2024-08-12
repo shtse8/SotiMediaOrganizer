@@ -45,6 +45,7 @@ interface ProgramOptions {
   move: boolean;
   resolution: string;
   hamming: string;
+  format: string;
 }
 
 interface ProcessingStats {
@@ -94,6 +95,19 @@ class LSH {
     }
   }
 
+  remove(hash: string, identifier: string) {
+    for (let i = 0; i < this.numBands; i++) {
+      const bandHash = hash.slice(i * this.bandSize, (i + 1) * this.bandSize);
+      const bandCandidates = this.bands[i].get(bandHash);
+      if (bandCandidates) {
+        bandCandidates.delete(identifier);
+        if (bandCandidates.size === 0) {
+          this.bands[i].delete(bandHash);
+        }
+      }
+    }
+  }
+
   getCandidates(hash: string): Set<string> {
     const candidates = new Set<string>();
     for (let i = 0; i < this.numBands; i++) {
@@ -122,6 +136,15 @@ class ThreadSafeLSH {
     const release = await this.mutex.acquire();
     try {
       this.lsh.add(hash, identifier);
+    } finally {
+      release();
+    }
+  }
+
+  async remove(hash: string, identifier: string) {
+    const release = await this.mutex.acquire();
+    try {
+      this.lsh.remove(hash, identifier);
     } finally {
       release();
     }
@@ -349,7 +372,8 @@ async function processMediaFile(
   lsh: ThreadSafeLSH,
   mutex: Mutex,
   resolution: number,
-  hammingThreshold: number
+  hammingThreshold: number,
+  format: string
 ): Promise<void> {
   let fileInfo: FileInfo;
   try {
@@ -390,13 +414,14 @@ async function processMediaFile(
         if (hammingDistance(fileInfo.hash, existingFile.hash, hammingThreshold)) {
           const bestFile = selectBestFile([existingFile, fileInfo]);
           if (bestFile.path === mediaFile) {
+            // Unlink the existing file since the current file is the best
             stats.replaced++;
-            const newTargetPath = await findUniquePath(existingFile.path);
             await unlink(existingFile.path);
-            await transferFile(mediaFile, newTargetPath, true);
-            processedFiles.set(fileInfo.hash, { ...fileInfo, path: newTargetPath });
-            await lsh.add(fileInfo.hash, fileInfo.hash);
-            logMessage(chalk.green(`Replaced: ${existingFile.path} with ${mediaFile}, moved to ${newTargetPath}`));
+
+            // Remove the hash from LSH
+            await lsh.remove(existingFile.hash, existingFile.hash);
+
+            logMessage(chalk.yellow(`Similar file replaced: ${existingFile.path} -> ${mediaFile}`));
           } else {
             stats.duplicates++;
             if (duplicateDir) {
@@ -416,7 +441,8 @@ async function processMediaFile(
                  fileInfo.metadata.CreateDate ? new Date(fileInfo.metadata.CreateDate) :
                  new Date();
 
-    let targetPath = await findUniquePath(join(targetDir, date.getFullYear().toString(), basename(mediaFile)));
+    // Generate target path using the format provided
+    let targetPath = await findUniquePath(generateTargetPath(format, targetDir, date, basename(mediaFile)));
 
     await transferFile(mediaFile, targetPath, shouldMove);
     
@@ -440,6 +466,31 @@ async function processMediaFile(
     errors: stats.errors,
     replaced: stats.replaced
   });
+}
+
+function generateTargetPath(format: string, targetDir: string, date: Date, fileName: string): string {
+  const yearFull = date.getFullYear().toString();
+  const yearShort = yearFull.slice(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+
+  // Split the format string into components
+  const formatParts = format.split('/');
+
+  // Replace placeholders in each part
+  const processedParts = formatParts.map(part => {
+    return part
+      .replace('YYYY', yearFull)
+      .replace('YY', yearShort)
+      .replace('MM', month)
+      .replace('DD', day);
+  });
+
+  // Join the processed parts to form the directory structure
+  const path = join(targetDir, ...processedParts);
+
+  // Return the final path including the file name
+  return join(path, fileName);
 }
 
 async function findUniquePath(basePath: string): Promise<string> {
@@ -472,6 +523,7 @@ async function main() {
     .option('-m, --move', 'Move files instead of copying them', false)
     .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '64')
     .option('-h, --hamming <number>', 'Hamming distance threshold (default: 10)', '10')
+    .option('-f, --format <string>', 'Format for target directory (default: YYYY/MM)', 'YYYY/MM')
     .parse(process.argv);
 
   const options = program.opts() as ProgramOptions;
@@ -515,7 +567,7 @@ async function main() {
   for (const dirPath of options.source) {
     for await (const mediaFile of getMediaFiles(dirPath)) {
       const [, release] = await semaphore.acquire();
-      const promise = processMediaFile(mediaFile, options.target, options.error, options.duplicate, options.move, processedFiles, lsh, mutex, resolution, hammingThreshold)
+      const promise = processMediaFile(mediaFile, options.target, options.error, options.duplicate, options.move, processedFiles, lsh, mutex, resolution, hammingThreshold, options.format)
         .then(() => {
           release();
         })
