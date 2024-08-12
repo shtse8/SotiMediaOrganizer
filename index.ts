@@ -470,8 +470,8 @@ async function main() {
     .option('-d, --duplicate <path>', 'Directory for duplicate files')
     .option('-w, --workers <number>', 'Number of concurrent workers', '5')
     .option('-m, --move', 'Move files instead of copying them', false)
-    .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 32)', '32')
-    .option('-h, --hamming <number>', 'Hamming distance threshold (default: 50)', '50')
+    .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '64')
+    .option('-h, --hamming <number>', 'Hamming distance threshold (default: 10)', '10')
     .parse(process.argv);
 
   const options = program.opts() as ProgramOptions;
