@@ -1,6 +1,5 @@
 import { readdir, stat, mkdir, rename, copyFile, unlink, readFile, open } from 'fs/promises';
 import { join, parse, basename, dirname, extname, relative } from 'path';
-import { promisify } from 'util';
 import { Semaphore, Mutex } from 'async-mutex';
 import { ExifTool } from 'exiftool-vendored';
 import { Command } from 'commander';
@@ -10,6 +9,7 @@ import cliProgress from 'cli-progress';
 import chalk from 'chalk';
 import heicConvert from 'heic-convert';
 import { Buffer } from 'buffer';
+import { promisify } from 'util';
 import { exec } from 'child_process';
 
 // Initialize ExifTool
@@ -139,19 +139,53 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-const execPromise = promisify(exec);
 
-async function discoverFilesUsingFd(sourceDirs: string[]): Promise<string[]> {
-  const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `.${ext}`).join('|');
-  const fdCommand = `fd --type f --extension ${extensionPattern} ${sourceDirs.join(' ')}`;
+const execAsync = promisify(exec);
 
-  try {
-    const { stdout } = await execPromise(fdCommand);
-    return stdout.split('\n').filter(Boolean);
-  } catch (error) {
-    // console.error(chalk.red('Error during file discovery using fd:'), error);
-    throw error;
+async function getNativeFileList(sourceDirs: string[]): Promise<string[]> {
+  const isWindows = process.platform === 'win32';
+  let allFiles: string[] = [];
+
+  if (isWindows) {
+    // Handle Windows-specific command using forfiles with chunked patterns
+    const maxPatternLength = 253; // Max characters for the /m option
+    const extensionChunks: string[][] = [];
+    let currentChunk: string[] = [];
+
+    // Break extensions into chunks
+    let currentLength = 0;
+    for (const ext of ALL_SUPPORTED_EXTENSIONS) {
+      const extPattern = `*.${ext}`;
+      if (currentLength + extPattern.length + 1 > maxPatternLength) {
+        extensionChunks.push(currentChunk);
+        currentChunk = [];
+        currentLength = 0;
+      }
+      currentChunk.push(extPattern);
+      currentLength += extPattern.length + 1;
+    }
+    if (currentChunk.length > 0) {
+      extensionChunks.push(currentChunk);
+    }
+
+    const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
+
+    for (const chunk of extensionChunks) {
+      const pattern = chunk.join(' ');
+      const command = `forfiles /s /p ${dirList} /m "${pattern}" /c "cmd /c echo @path"`;
+      const { stdout } = await execAsync(command);
+      allFiles.push(...stdout.split('\n').filter(line => line.trim() !== ''));
+    }
+  } else {
+    // Handle Unix-like command using find
+    const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `-name "*.${ext}"`).join(' -o ');
+    const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
+    const command = `find ${dirList} -type f \\( ${extensionPattern} \\)`;
+    const { stdout } = await execAsync(command);
+    allFiles.push(...stdout.split('\n').filter(line => line.trim() !== ''));
   }
+  
+  return allFiles;
 }
 
 async function discoverFilesWithNode(sourceDirs: string[], concurrency: number = 20): Promise<string[]> {
@@ -184,10 +218,10 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 20): Pr
   let allFiles: string[] = [];
 
   try {
-    console.log(chalk.blue('Attempting to use fd for file discovery...'));
-    allFiles = await discoverFilesUsingFd(sourceDirs);
-  } catch {
-    console.log(chalk.blue('fd not available or failed, falling back to Node.js implementation...'));
+    console.log(chalk.blue('Attempting to use native commands for file discovery...'));
+    allFiles = await getNativeFileList(sourceDirs);
+  } catch (e) {
+    console.warn(chalk.yellow('Native command failed, falling back to Node.js method...'));    
     allFiles = await discoverFilesWithNode(sourceDirs, concurrency);
   }
 
@@ -197,6 +231,7 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 20): Pr
 
   return allFiles;
 }
+
 
 // Stage 2: Deduplication
 async function deduplicateFiles(
