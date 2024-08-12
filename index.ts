@@ -187,7 +187,8 @@ async function deduplicateFiles(
   resolution: number,
   hammingThreshold: number,
   existingFiles: Map<string, FileInfo>,
-  lsh: ThreadSafeLSH
+  lsh: ThreadSafeLSH,
+  concurrency: number = 10 // Set the level of concurrency
 ): Promise<{
   uniqueFiles: Map<string, FileInfo>,
   duplicates: Map<string, string>,
@@ -222,50 +223,58 @@ async function deduplicateFiles(
     formatBars.set(ext, multibar.create(count, 0, { format: ext, duplicates: 0, errors: 0 }));
   }
 
-  for (let i = 0; i < files.length; i++) {
-    const filePath = files[i];
-    const ext = extname(filePath).slice(1).toLowerCase();
-    const formatBar = formatBars.get(ext);
+  // Initialize semaphore for concurrency control
+  const semaphore = new Semaphore(concurrency);
 
+  // Concurrently process files
+  await Promise.all(files.map(async (filePath) => {
+    const [_, release] = await semaphore.acquire();
     try {
-      formatCounts.set(ext, (formatCounts.get(ext) || 0) + 1);
+      const ext = extname(filePath).slice(1).toLowerCase();
+      const formatBar = formatBars.get(ext);
 
-      const fileInfo = await getFileInfo(filePath, resolution);
+      try {
+        formatCounts.set(ext, (formatCounts.get(ext) || 0) + 1);
 
-      if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
-        duplicates.set(filePath, existingFiles.get(fileInfo.hash)?.path || uniqueFiles.get(fileInfo.hash)!.path);
-        formatBar?.increment({ duplicates: duplicates.size });
-      } else if (fileInfo.perceptualHash && isImageFile(filePath)) {
-        const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
-        let isDuplicate = false;
-        for (const candidateHash of candidates) {
-          const simpleHash = perceptualHashMap.get(candidateHash);
-          if (simpleHash) {
-            const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
-            if (existingFile && existingFile.perceptualHash &&
-              hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
-              duplicates.set(filePath, existingFile.path);
-              isDuplicate = true;
-              break;
+        const fileInfo = await getFileInfo(filePath, resolution);
+
+        if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
+          duplicates.set(filePath, existingFiles.get(fileInfo.hash)?.path || uniqueFiles.get(fileInfo.hash)!.path);
+          formatBar?.increment({ duplicates: duplicates.size });
+        } else if (fileInfo.perceptualHash && isImageFile(filePath)) {
+          const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
+          let isDuplicate = false;
+          for (const candidateHash of candidates) {
+            const simpleHash = perceptualHashMap.get(candidateHash);
+            if (simpleHash) {
+              const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
+              if (existingFile && existingFile.perceptualHash &&
+                hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
+                duplicates.set(filePath, existingFile.path);
+                isDuplicate = true;
+                break;
+              }
             }
           }
-        }
-        if (!isDuplicate) {
+          if (!isDuplicate) {
+            uniqueFiles.set(fileInfo.hash, fileInfo);
+            await lsh.add(fileInfo.perceptualHash, fileInfo.hash);
+            perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
+          }
+          formatBar?.increment();
+        } else {
           uniqueFiles.set(fileInfo.hash, fileInfo);
-          await lsh.add(fileInfo.perceptualHash, fileInfo.hash);
-          perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
+          formatBar?.increment();
         }
-        formatBar?.increment();
-      } else {
-        uniqueFiles.set(fileInfo.hash, fileInfo);
-        formatBar?.increment();
+      } catch (error) {
+        errorCount++;
+        console.error(`Error processing ${filePath}:`, error);
+        formatBar?.increment({ errors: errorCount });
       }
-    } catch (error) {
-      errorCount++;
-      console.error(`Error processing ${filePath}:`, error);
-      formatBar?.increment({ errors: errorCount });
+    } finally {
+      release();
     }
-  }
+  }));
 
   multibar.stop();
 
@@ -410,23 +419,22 @@ async function getImageQuality(filePath: string): Promise<number> {
 }
 
 async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
-  const [fileStat, hash, metadata] = await Promise.all([
+  const [fileStat, hash, metadata, perceptualHash, quality] = await Promise.all([
     stat(filePath),
     calculateFileHash(filePath),
-    getMetadata(filePath)
+    getMetadata(filePath),
+    isImageFile(filePath) ? calculatePerceptualHash(filePath, resolution) : Promise.resolve(undefined),
+    isImageFile(filePath) ? getImageQuality(filePath) : Promise.resolve(undefined)
   ]);
 
   const fileInfo: FileInfo = {
     path: filePath,
     size: fileStat.size,
     hash,
-    metadata
+    metadata,
+    perceptualHash,
+    quality
   };
-
-  if (isImageFile(filePath)) {
-    fileInfo.perceptualHash = await calculatePerceptualHash(filePath, resolution);
-    fileInfo.quality = await getImageQuality(filePath);
-  }
 
   return fileInfo;
 }
