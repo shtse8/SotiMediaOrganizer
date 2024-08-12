@@ -234,10 +234,10 @@ async function deduplicateFiles(
     formatBars.set(ext, multibar.create(count, 0, { format: ext, duplicates: 0, errors: 0 }));
   }
 
-  // Initialize overall progress bar
+  // Initialize overall progress bar with ETA
   const totalFiles = files.length;
   const overallBar = multibar.create(totalFiles, 0, {
-    format: 'Overall Progress',
+    format: 'Overall Progress | {bar} | {percentage}% | {value}/{total} Files | ETA: {eta_formatted} | Duplicates: {duplicates} | Errors: {errors}',
     duplicates: 0,
     errors: 0
   });
