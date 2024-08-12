@@ -447,30 +447,34 @@ async function processImageFile(filePath: string, resolution: number): Promise<{
 }> {
   const image = sharp(filePath, { failOnError: false });
 
-  const [perceptualHashData, metadata] = await Promise.all([
-    image
-      .jpeg()
-      .resize(resolution, resolution, { fit: 'fill' })
-      .greyscale()
-      .raw()
-      .toBuffer({ resolveWithObject: true }),
-    image.metadata()
-  ]);
+  try {
+    const [perceptualHashData, metadata] = await Promise.all([
+      image
+        .jpeg()
+        .resize(resolution, resolution, { fit: 'fill' })
+        .greyscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true }),
+      image.metadata()
+    ]);
 
-  // Calculate perceptual hash
-  let hash = '';
-  const pixelCount = resolution * resolution;
-  const totalBrightness = perceptualHashData.data.reduce((sum: number, pixel: number) => sum + pixel, 0);
-  const averageBrightness = totalBrightness / pixelCount;
+    // Calculate perceptual hash
+    let hash = '';
+    const pixelCount = resolution * resolution;
+    const totalBrightness = perceptualHashData.data.reduce((sum: number, pixel: number) => sum + pixel, 0);
+    const averageBrightness = totalBrightness / pixelCount;
 
-  for (let i = 0; i < pixelCount; i++) {
-    hash += perceptualHashData.data[i] < averageBrightness ? '0' : '1';
+    for (let i = 0; i < pixelCount; i++) {
+      hash += perceptualHashData.data[i] < averageBrightness ? '0' : '1';
+    }
+
+    // Calculate image quality
+    const quality = (metadata.width || 0) * (metadata.height || 0);
+
+    return { perceptualHash: hash, quality };
+  } finally {
+    image.destroy();
   }
-
-  // Calculate image quality
-  const quality = (metadata.width || 0) * (metadata.height || 0);
-
-  return { perceptualHash: hash, quality };
 }
 
 async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
