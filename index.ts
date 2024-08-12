@@ -460,19 +460,15 @@ async function processImageFile(filePath: string, resolution: number): Promise<{
 }> {
   const image = sharp(filePath, { failOnError: false });
 
-  // const [perceptualHashData, metadata] = await Promise.all([
-  //   image
-  //     .clone()
-  //     .jpeg()
-  //     .resize(resolution, resolution, { fit: 'fill' })
-  //     .greyscale()
-  //     .raw()
-  //     .toBuffer({ resolveWithObject: true }),
-  //   image.clone().metadata()
-  // ]);
-
-  const perceptualHashData = await image.clone().jpeg().resize(resolution, resolution, { fit: 'fill' }).greyscale().raw().toBuffer({ resolveWithObject: true });
-  const metadata = await image.clone().metadata();
+  const [perceptualHashData, metadata] = await Promise.all([
+    image
+      .jpeg()
+      .resize(resolution, resolution, { fit: 'fill' })
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true }),
+    image.metadata()
+  ]);
 
 
   // Calculate perceptual hash
