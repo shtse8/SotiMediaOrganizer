@@ -155,12 +155,15 @@ async function getNativeFileList(sourceDirs: string[], logInterval: number = 100
           child.stdout.on('data', (data) => {
               stdoutData += data.toString();
 
-              // Increment file count based on the number of lines (files) received
-              const newFiles = stdoutData.split('\n').filter(line => line.trim() !== '');
-              const newFileCount = newFiles.length;
-              fileCount += newFileCount;
+              // Split the received data into lines and process them
+              const newLines = stdoutData.split('\n');
+              stdoutData = newLines.pop()!; // Keep the last line for next data chunk
 
-              // Log progress
+              const newFiles = newLines.filter(line => line.trim() !== '');
+              fileCount += newFiles.length;
+              allFiles.push(...newFiles);
+
+              // Log progress after every logInterval files
               if (fileCount - lastLogFileCount >= logInterval) {
                   lastLogFileCount = fileCount;
                   console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
@@ -173,7 +176,7 @@ async function getNativeFileList(sourceDirs: string[], logInterval: number = 100
 
           child.on('close', (code) => {
               if (code === 0) {
-                  resolve(stdoutData.split('\n').filter(line => line.trim() !== ''));
+                  resolve(allFiles);
               } else {
                   reject(new Error(`Command exited with code ${code}`));
               }
@@ -186,7 +189,7 @@ async function getNativeFileList(sourceDirs: string[], logInterval: number = 100
   };
 
   if (isWindows) {
-      const maxPatternLength = 253;
+      const maxPatternLength = 253; // Max characters for the /m option
       const extensionChunks: string[][] = [];
       let currentChunk: string[] = [];
       let currentLength = 0;
@@ -216,7 +219,6 @@ async function getNativeFileList(sourceDirs: string[], logInterval: number = 100
       }
   } else {
       const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `-name "*.${ext}"`).join(' -o ');
-      const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
 
       for (const dir of sourceDirs) {
           dirCount++;
@@ -225,6 +227,10 @@ async function getNativeFileList(sourceDirs: string[], logInterval: number = 100
           allFiles.push(...files);
       }
   }
+
+  console.log(chalk.green(`\nDiscovery completed:`));
+  console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
+  console.log(chalk.cyan(`- Found ${fileCount} files`));
 
   return allFiles;
 }
