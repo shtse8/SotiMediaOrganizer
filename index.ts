@@ -144,33 +144,44 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   const startTime = Date.now();
   const semaphore = new Semaphore(concurrency);
 
-  const scanDirectory = async (dirPath: string): Promise<void> => {
-      const [_, release] = await semaphore.acquire();
-      try {
-          dirCount++;
-          const entries = await readdir(dirPath, { withFileTypes: true });
+  async function scanDirectory(dirPath: string): Promise<void> {
+    try {
+      dirCount++;
+      const entries = await readdir(dirPath, { withFileTypes: true });
 
-          await Promise.all(entries.map(async entry => {
-              const entryPath = join(dirPath, entry.name);
-              if (entry.isDirectory()) {
-                  await scanDirectory(entryPath);
-              } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
-                  allFiles.push(entryPath);
-                  fileCount++;
+      for (const entry of entries) {
+        const entryPath = join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          const [_, release] = await semaphore.acquire();
+          scanDirectory(entryPath).finally(() => {
+            release();
+          });
+        } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
+          allFiles.push(entryPath);
+          fileCount++;
 
-                  // Log progress after every logInterval files
-                  if (fileCount - lastLogFileCount >= logInterval) {
-                      lastLogFileCount = fileCount;
-                      console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
-                  }
-              }
-          }));
-      } finally {
-          release();
+          // Log progress after every logInterval files
+          if (fileCount - lastLogFileCount >= logInterval) {
+            lastLogFileCount = fileCount;
+            console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+          }
+        }
       }
-  };
+    } catch (error) {
+      console.error(chalk.red(`Error scanning directory ${dirPath}:`, error));
+    }
+  }
 
-  await Promise.all(sourceDirs.map(dirPath => scanDirectory(dirPath)));
+  // Start scanning all source directories
+  for (const dirPath of sourceDirs) {
+    const [_, release] = await semaphore.acquire();
+    scanDirectory(dirPath).finally(() => {
+      release();
+    });
+  }
+
+  // Wait for all scanning processes to complete
+  await semaphore.waitForUnlock(concurrency);
 
   const duration = (Date.now() - startTime) / 1000;
   console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
@@ -180,7 +191,6 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   return allFiles;
 }
 
-
 // Stage 2: Deduplication
 async function deduplicateFiles(
   files: string[],
@@ -188,7 +198,7 @@ async function deduplicateFiles(
   hammingThreshold: number,
   existingFiles: Map<string, FileInfo>,
   lsh: ThreadSafeLSH,
-  concurrency: number = 1 // Set the level of concurrency
+  concurrency: number = 1
 ): Promise<{
   uniqueFiles: Map<string, FileInfo>,
   duplicates: Map<string, string>,
@@ -235,79 +245,80 @@ async function deduplicateFiles(
   }
 
   async function replaceExistingFile(newFile: FileInfo, existingFile: FileInfo) {
-    // Remove existing file from data structures
     uniqueFiles.delete(existingFile.hash);
     if (existingFile.perceptualHash) {
       await lsh.remove(existingFile.perceptualHash, existingFile.hash);
       perceptualHashMap.delete(existingFile.perceptualHash);
     }
-
-    // Add new file to data structures
     await addUniqueFile(newFile);
-
-    // Update duplicates map
     duplicates.set(existingFile.path, newFile.path);
   }
 
-  await Promise.all(files.map(async (filePath) => {
-    const [_, release] = await semaphore.acquire();
+  async function processFile(filePath: string) {
+    const ext = extname(filePath).slice(1).toLowerCase();
+    const formatBar = formatBars.get(ext);
+
     try {
-      const ext = extname(filePath).slice(1).toLowerCase();
-      const formatBar = formatBars.get(ext);
+      formatCounts.set(ext, (formatCounts.get(ext) || 0) + 1);
 
-      try {
-        formatCounts.set(ext, (formatCounts.get(ext) || 0) + 1);
+      const fileInfo = await getFileInfo(filePath, resolution);
 
-        const fileInfo = await getFileInfo(filePath, resolution);
+      let isDuplicate = false;
 
-        let isDuplicate = false;
-
-        // Check for exact duplicates
-        if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
-          const existingFile = existingFiles.get(fileInfo.hash) || uniqueFiles.get(fileInfo.hash)!;
-          const bestFile = selectBestFile([existingFile, fileInfo]);
-          if (bestFile.path === filePath) {
-            await replaceExistingFile(fileInfo, existingFile);
-          } else {
-            duplicates.set(filePath, existingFile.path);
-          }
-          isDuplicate = true;
-        } 
-        // Check for perceptually similar images
-        else if (fileInfo.perceptualHash && isImageFile(filePath)) {
-          const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
-          for (const candidateHash of candidates) {
-            const simpleHash = perceptualHashMap.get(candidateHash);
-            if (simpleHash) {
-              const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
-              if (existingFile && existingFile.perceptualHash &&
-                hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
-                const bestFile = selectBestFile([existingFile, fileInfo]);
-                if (bestFile.path === filePath) {
-                  await replaceExistingFile(fileInfo, existingFile);
-                } else {
-                  duplicates.set(filePath, existingFile.path);
-                }
-                isDuplicate = true;
-                break;
+      // Check for exact duplicates
+      if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
+        const existingFile = existingFiles.get(fileInfo.hash) || uniqueFiles.get(fileInfo.hash)!;
+        const bestFile = selectBestFile([existingFile, fileInfo]);
+        if (bestFile.path === filePath) {
+          await replaceExistingFile(fileInfo, existingFile);
+        } else {
+          duplicates.set(filePath, existingFile.path);
+        }
+        isDuplicate = true;
+      } 
+      // Check for perceptually similar images
+      else if (fileInfo.perceptualHash && isImageFile(filePath)) {
+        const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
+        for (const candidateHash of candidates) {
+          const simpleHash = perceptualHashMap.get(candidateHash);
+          if (simpleHash) {
+            const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
+            if (existingFile && existingFile.perceptualHash &&
+              hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
+              const bestFile = selectBestFile([existingFile, fileInfo]);
+              if (bestFile.path === filePath) {
+                await replaceExistingFile(fileInfo, existingFile);
+              } else {
+                duplicates.set(filePath, existingFile.path);
               }
+              isDuplicate = true;
+              break;
             }
           }
         }
-
-        if (!isDuplicate) {
-          await addUniqueFile(fileInfo);
-        }
-
-        formatBar?.increment({ duplicates: duplicates.size });
-      } catch (error) {
-        errorCount++;
-        formatBar?.increment({ errors: errorCount });
       }
-    } finally {
-      release();
+
+      if (!isDuplicate) {
+        await addUniqueFile(fileInfo);
+      }
+
+      formatBar?.increment({ duplicates: duplicates.size });
+    } catch (error) {
+      errorCount++;
+      formatBar?.increment({ errors: errorCount });
     }
-  }));
+  }
+
+  // Process all files
+  for (const filePath of files) {
+    const [_, release] = await semaphore.acquire();
+    processFile(filePath).finally(() => {
+      release();
+    });
+  }
+
+  // Wait for all processes to complete
+  await semaphore.waitForUnlock(concurrency);
 
   multibar.stop();
 
