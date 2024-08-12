@@ -457,8 +457,9 @@ async function processImageFile(filePath: string, resolution: number): Promise<{
       .greyscale()
       .raw()
       .toBuffer({ resolveWithObject: true }),
-    image.metadata()
+    image.clone().metadata()
   ]);
+
 
   // Calculate perceptual hash
   let hash = '';
