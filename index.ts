@@ -137,34 +137,42 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-async function discoverFiles(sourceDirs: string[]): Promise<string[]> {
+async function discoverFiles(sourceDirs: string[], concurrency: number = 10): Promise<string[]> {
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
   const startTime = Date.now();
+  const semaphore = new Semaphore(concurrency);
 
   async function scanDirectory(dirPath: string): Promise<void> {
-    dirCount++;
-    const entries = await readdir(dirPath, { withFileTypes: true });
+    const [_, release] = await semaphore.acquire();
+    try {
+      dirCount++;
+      const entries = await readdir(dirPath, { withFileTypes: true });
 
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        await scanDirectory(join(dirPath, entry.name));
-      } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
-        allFiles.push(join(dirPath, entry.name));
-        fileCount++;
+      const subDirPromises: Promise<void>[] = [];
+
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          subDirPromises.push(scanDirectory(join(dirPath, entry.name)));
+        } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
+          allFiles.push(join(dirPath, entry.name));
+          fileCount++;
+        }
       }
-    }
 
-    // Periodically log progress
-    if (dirCount % 100 === 0 || fileCount % 1000 === 0) {
-      console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+      await Promise.all(subDirPromises);
+
+      // Periodically log progress
+      if (dirCount % 100 === 0 || fileCount % 1000 === 0) {
+        console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+      }
+    } finally {
+      release();
     }
   }
 
-  for (const dirPath of sourceDirs) {
-    await scanDirectory(dirPath);
-  }
+  await Promise.all(sourceDirs.map(dirPath => scanDirectory(dirPath)));
 
   const endTime = Date.now();
   const duration = (endTime - startTime) / 1000; // Convert to seconds
