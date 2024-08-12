@@ -1,4 +1,4 @@
-import { readdir, stat, mkdir, rename, copyFile, unlink, readFile } from 'fs/promises';
+import { readdir, stat, mkdir, rename, copyFile, unlink, readFile, open } from 'fs/promises';
 import { join, parse, basename, dirname, extname } from 'path';
 import { Semaphore, Mutex } from 'async-mutex';
 import { ExifTool } from 'exiftool-vendored';
@@ -32,6 +32,7 @@ interface FileInfo {
   path: string;
   size: number;
   hash: string;
+  perceptualHash?: string;
   metadata: any;
   quality?: number;
 }
@@ -61,6 +62,8 @@ const stats: ProcessingStats = {
   errors: 0,
   replaced: 0,
 };
+
+const perceptualHashMap = new Map<string, string>(); // Maps perceptualHash -> simpleHash
 
 const progressBar = new cliProgress.SingleBar({
   format: 'Processing |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Files || Duplicates: {duplicates} | Errors: {errors} | Replaced: {replaced}',
@@ -159,16 +162,51 @@ class ThreadSafeLSH {
     }
   }
 }
+async function calculatePartialFileHash(filePath: string, chunkSize = 1024 * 1024): Promise<string> {
+  const hash = createHash('md5');
+  const fileHandle = await open(filePath, 'r');
 
-async function calculateFileHash(filePath: string, resolution: number): Promise<string> {
   try {
-    if (isImageFile(filePath)) {
-      return await calculatePerceptualHash(filePath, resolution);
+    const fileSize = (await fileHandle.stat()).size;
+
+    // Read first chunk
+    const bufferStart = Buffer.alloc(chunkSize);
+    await fileHandle.read(bufferStart, 0, chunkSize, 0);
+    hash.update(bufferStart);
+
+    // Read last chunk if the file is larger than the chunk size
+    if (fileSize > chunkSize) {
+      const bufferEnd = Buffer.alloc(chunkSize);
+      await fileHandle.read(bufferEnd, 0, chunkSize, fileSize - chunkSize);
+      hash.update(bufferEnd);
     }
-  } catch (error) {
-    console.warn(`Warning: Could not process ${filePath} with Sharp. Falling back to file hash.`);
+  } finally {
+    await fileHandle.close();
   }
-  return calculateSimpleFileHash(filePath);
+
+  return hash.digest('hex');
+}
+
+async function calculateFileHashes(filePath: string, resolution: number): Promise<{ hash: string, perceptualHash?: string }> {
+  // Use partial hash for large files
+  const fileStat = await stat(filePath);
+  let hash;
+  if (fileStat.size > 1024 * 1024 * 100) { // e.g., files larger than 100MB
+    hash = await calculatePartialFileHash(filePath);
+  } else {
+    hash = await calculateSimpleFileHash(filePath); // Full hash for smaller files
+  }
+
+  let perceptualHash;
+  if (isImageFile(filePath)) {
+    try {
+      perceptualHash = await calculatePerceptualHash(filePath, resolution);
+    } catch (error) {
+      console.warn(`Warning: Could not process ${filePath} with perceptual hashing.`);
+    }
+  }
+
+  return { hash, perceptualHash };
 }
 
 
@@ -261,16 +299,19 @@ async function getImageQuality(filePath: string): Promise<number> {
 }
 
 async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
-  const [fileStat, hash, metadata] = await Promise.all([
+  const [fileStat, hashes, metadata] = await Promise.all([
     stat(filePath),
-    calculateFileHash(filePath, resolution),
+    calculateFileHashes(filePath, resolution),
     getMetadata(filePath)
   ]);
+
+  const { hash, perceptualHash } = hashes;
 
   const fileInfo: FileInfo = {
     path: filePath,
     size: fileStat.size,
     hash,
+    perceptualHash,
     metadata
   };
 
@@ -407,19 +448,30 @@ async function processMediaFile(
       return;
     }
 
-    if (isImageFile(mediaFile)) {
-      const candidates = await lsh.getCandidates(fileInfo.hash);
+    if (fileInfo.perceptualHash && isImageFile(mediaFile)) {
+      const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
       for (const candidateHash of candidates) {
-        const existingFile = processedFiles.get(candidateHash)!;
-        if (hammingDistance(fileInfo.hash, existingFile.hash, hammingThreshold)) {
+        const simpleHash = perceptualHashMap.get(candidateHash);
+        if (!simpleHash) {
+          logMessage(chalk.red(`Internal error: Missing simpleHash for perceptualHash ${candidateHash}`));
+          throw new Error(`Missing simpleHash for perceptualHash ${candidateHash}`);
+        }
+    
+        const existingFile = processedFiles.get(simpleHash);
+        if (!existingFile) {
+          logMessage(chalk.red(`Internal error: Missing FileInfo for simpleHash ${simpleHash}`));
+          throw new Error(`Missing FileInfo for simpleHash ${simpleHash}`);
+        }
+
+        if (existingFile.perceptualHash && hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
           const bestFile = selectBestFile([existingFile, fileInfo]);
           if (bestFile.path === mediaFile) {
-            // Unlink the existing file since the current file is the best
+            // Handle the best file scenario
             stats.replaced++;
             await unlink(existingFile.path);
 
             // Remove the hash from LSH
-            await lsh.remove(existingFile.hash, existingFile.hash);
+            await lsh.remove(existingFile.perceptualHash, existingFile.perceptualHash);
 
             logMessage(chalk.yellow(`Similar file replaced: ${existingFile.path} -> ${mediaFile}`));
           } else {
@@ -431,8 +483,8 @@ async function processMediaFile(
             } else {
               logMessage(chalk.yellow(`Similar file found: ${mediaFile} (skipped), bestFile.path = ${bestFile.path}`));
             }
+            return;
           }
-          return;
         }
       }
     }
@@ -449,8 +501,9 @@ async function processMediaFile(
     logMessage(chalk.green(`Successfully ${shouldMove ? 'moved' : 'copied'} ${mediaFile} to ${targetPath}`));
     
     processedFiles.set(fileInfo.hash, { ...fileInfo, path: targetPath });
-    if (isImageFile(mediaFile)) {
-      await lsh.add(fileInfo.hash, fileInfo.hash);
+    if (fileInfo.perceptualHash && isImageFile(mediaFile)) {
+      await lsh.add(fileInfo.perceptualHash, fileInfo.perceptualHash);
+      perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
     }
 
     stats.processed++;
