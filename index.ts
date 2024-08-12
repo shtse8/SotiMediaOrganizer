@@ -121,8 +121,8 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
           allFiles.push(entryPath);
           fileCount++;
         }
-        spinner.text = `Processed ${dirCount} directories, found ${fileCount} files...`;
       }
+      spinner.text = `Processed ${dirCount} directories, found ${fileCount} files...`;
     } catch (error) {
       console.error(chalk.red(`Error scanning directory ${dirPath}:`, error));
     }
