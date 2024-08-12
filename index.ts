@@ -5,9 +5,10 @@ import { ExifTool } from 'exiftool-vendored';
 import { Command } from 'commander';
 import sharp from 'sharp';
 import { createHash } from 'crypto';
-import cliProgress, { MultiBar, Presets, SingleBar, type GenericFormatter, type Options } from 'cli-progress';
+import cliProgress from 'cli-progress';
 import chalk from 'chalk';
 import { Buffer } from 'buffer';
+import colors from 'ansi-colors';
 
 // Initialize ExifTool
 const exiftool = new ExifTool();
@@ -220,43 +221,29 @@ async function deduplicateFiles(
   }, {} as Record<string, number>);
 
   // Initialize MultiBar
-  const multibar = new MultiBar({
+  const multibar = new cliProgress.MultiBar({
     hideCursor: true,
-    format: ' {bar} | {percentage}% | {value}/{total} {format} Files | Duplicates: {duplicates} | Errors: {errors}',
     barCompleteChar: '\u2588',
     barIncompleteChar: '\u2591'
-  }, Presets.shades_classic);
+  }, cliProgress.Presets.shades_classic);
 
   // Initialize individual progress bars for each format
-  const formatBars: Map<string, SingleBar> = new Map();
+  const formatBars: Map<string, cliProgress.SingleBar> = new Map();
 
   for (const [ext, count] of Object.entries(formatFileCounts)) {
-    formatBars.set(ext, multibar.create(count, 0, { format: ext, duplicates: 0, errors: 0 }));
+    formatBars.set(ext, multibar.create(count, 0, { format: ext.padEnd(7, ' '), duplicates: 0, errors: 0 }, {
+      format: colors.grey('{format} {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
+     }));
   }
 
-  // Custom format function for overall progress
-  const overallFormat: GenericFormatter = (options: Options, params: any, payload: any): string => {
-    const barCompleteChar = options.barCompleteString || '=';
-    const barIncompleteChar = options.barIncompleteString || '-';
-    const barsize = options.barsize || 20;
-
-    const completeSize = Math.round(params.progress * barsize);
-    const incompleteSize = barsize - completeSize;
-
-    const bar = barCompleteChar.repeat(completeSize) + barIncompleteChar.repeat(incompleteSize);
-    
-    const percentage = (params.value / params.total * 100).toFixed(0);
-    const eta = params.eta !== undefined ? params.eta.toString() : 'N/A';
-    const etaPadded = eta.padStart(4, ' ');
-    
-    return `Overall Progress | ${bar} | ${percentage}% | ${params.value}/${params.total} Files ` +
-           `| ETA: ${etaPadded}s | Duplicates: ${payload.duplicates} | Errors: ${payload.errors}`;
-  };
-
-  // Initialize overall progress bar with custom format function
+  // Initialize overall progress bar with ETA
   const totalFiles = files.length;
-  const overallBar = multibar.create(totalFiles, 0, { duplicates: 0, errors: 0 }, { format: overallFormat });
-
+  const overallBar = multibar.create(totalFiles, 0, {
+    duplicates: 0,
+    errors: 0
+  }, {
+    format: colors.white('Overall {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
+  });
 
   // Initialize semaphore for concurrency control
   const semaphore = new Semaphore(concurrency);
