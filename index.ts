@@ -77,6 +77,7 @@ interface DeduplicationResult {
   uniqueFiles: Map<string, FileInfo>;
   duplicateSets: Map<string, DuplicateSet>;
   formatStats: Map<string, FormatStats>;
+  errorFiles: string[];
   stats: {
     totalFiles: number;
     pickedFiles: number;
@@ -189,6 +190,7 @@ async function deduplicateFiles(
   const duplicateSets = new Map<string, DuplicateSet>();
   const perceptualHashMap = new Map<string, string>();
   const formatStats = new Map<string, FormatStats>();
+  const errorFiles: string[] = [];
   const overallStats: OverallStats = {
     processedCount: 0,
     pickedFiles: 0,
@@ -402,6 +404,7 @@ async function deduplicateFiles(
       });
 
     } catch (error) {
+      errorFiles.push(filePath);
       const stats = formatStats.get(ext)!;
       updateFormatStats(ext, {
         processedCount: stats.processedCount + 1,
@@ -437,6 +440,7 @@ async function deduplicateFiles(
   return {
     uniqueFiles,
     duplicateSets,
+    errorFiles,
     formatStats,
     stats: {
       totalFiles: files.length,
@@ -475,8 +479,10 @@ function selectBestFile(files: FileInfo[]): FileInfo {
 async function transferFiles(
   uniqueFiles: Map<string, FileInfo>,
   duplicateSets: Map<string, DuplicateSet>,
+  errorFiles: string[], // Add this parameter
   targetDir: string,
   duplicateDir: string | undefined,
+  errorDir: string | undefined, // Add this parameter
   debugDir: string | undefined,
   format: string,
   shouldMove: boolean
@@ -544,6 +550,17 @@ async function transferFiles(
       await transferOrCopyFile(bestFile.path, targetPath, !shouldMove);
       bestFileBar.increment();
     }
+  }
+
+  // Handle error files
+  if (errorDir && errorFiles.length > 0) {
+    const errorBar = multibar.create(errorFiles.length, 0, { phase: 'Error   ' });
+    for (const errorFilePath of errorFiles) {
+      const targetPath = join(errorDir, basename(errorFilePath));
+      await transferOrCopyFile(errorFilePath, targetPath, !shouldMove);
+      errorBar.increment();
+    }
+    console.log(chalk.yellow(`${errorFiles.length} files that couldn't be processed have been ${shouldMove ? 'moved' : 'copied'} to ${errorDir}`));
   }
 
   multibar.stop();
@@ -642,10 +659,7 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
     calculateFileHash(filePath),
     getMetadata(filePath),
     isImageFile(filePath) 
-      ? processImageFile(filePath, resolution).catch(error => {
-          // console.warn(`Could not process image file ${filePath}: ${error}`);
-          return { perceptualHash: undefined, quality: undefined };
-        })
+      ? processImageFile(filePath, resolution)
       : Promise.resolve({ perceptualHash: undefined, quality: undefined })
   ]);
 
@@ -750,17 +764,28 @@ async function main() {
 
   // Stage 2: Deduplication
   console.log(chalk.blue('\nStage 2: Deduplicating files...'));
-  const { uniqueFiles, duplicateSets } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold);
+  const { uniqueFiles, duplicateSets, errorFiles } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold);
 
   // Stage 3: File Transfer
   console.log(chalk.blue('\nStage 3: Transferring files...'));
-  await transferFiles(uniqueFiles, duplicateSets, options.target, options.duplicate, options.debug, options.format, options.move);
+  await transferFiles(
+    uniqueFiles, 
+    duplicateSets, 
+    errorFiles, 
+    options.target, 
+    options.duplicate, 
+    options.error, 
+    options.debug, 
+    options.format, 
+    options.move
+  );
 
   console.log(chalk.green('\nMedia organization completed'));
   console.log(chalk.cyan(`Total files discovered: ${discoveredFiles.length}`));
   console.log(chalk.cyan(`Unique files: ${uniqueFiles.size}`));
   console.log(chalk.yellow(`Duplicate sets: ${duplicateSets.size}`));
   console.log(chalk.yellow(`Total duplicates: ${Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)}`));
+  console.log(chalk.red(`Files with errors: ${errorFiles.length}`));
 
   if (options.debug) {
     console.log(chalk.yellow('Debug mode: All files in duplicate sets have been copied to the debug directory for verification.'));
