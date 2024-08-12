@@ -136,7 +136,7 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-async function discoverFiles(sourceDirs: string[], concurrency: number = 10, logInterval: number = 1000): Promise<string[]> {
+async function discoverFiles(sourceDirs: string[], concurrency: number = 10, logInterval: number = 10000): Promise<string[]> {
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
@@ -188,7 +188,7 @@ async function deduplicateFiles(
   hammingThreshold: number,
   existingFiles: Map<string, FileInfo>,
   lsh: ThreadSafeLSH,
-  concurrency: number = 3 // Set the level of concurrency
+  concurrency: number = 1 // Set the level of concurrency
 ): Promise<{
   uniqueFiles: Map<string, FileInfo>,
   duplicates: Map<string, string>,
