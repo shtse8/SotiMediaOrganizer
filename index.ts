@@ -137,52 +137,50 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-async function discoverFiles(sourceDirs: string[], concurrency: number = 10): Promise<string[]> {
+async function discoverFiles(sourceDirs: string[], concurrency: number = 10, logInterval: number = 1000): Promise<string[]> {
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
+  let lastLogFileCount = 0;
   const startTime = Date.now();
   const semaphore = new Semaphore(concurrency);
 
-  async function scanDirectory(dirPath: string): Promise<void> {
+  const scanDirectory = async (dirPath: string): Promise<void> => {
     const [_, release] = await semaphore.acquire();
     try {
       dirCount++;
       const entries = await readdir(dirPath, { withFileTypes: true });
 
-      const subDirPromises: Promise<void>[] = [];
-
-      for (const entry of entries) {
+      await Promise.all(entries.map(async entry => {
+        const entryPath = join(dirPath, entry.name);
         if (entry.isDirectory()) {
-          subDirPromises.push(scanDirectory(join(dirPath, entry.name)));
+          await scanDirectory(entryPath);
         } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
-          allFiles.push(join(dirPath, entry.name));
+          allFiles.push(entryPath);
           fileCount++;
+
+          // Log progress after every logInterval files
+          if (fileCount - lastLogFileCount >= logInterval) {
+            lastLogFileCount = fileCount;
+            console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+          }
         }
-      }
-
-      await Promise.all(subDirPromises);
-
-      // Periodically log progress
-      if (dirCount % 100 === 0 || fileCount % 1000 === 0) {
-        console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
-      }
+      }));
     } finally {
       release();
     }
-  }
+  };
 
   await Promise.all(sourceDirs.map(dirPath => scanDirectory(dirPath)));
 
-  const endTime = Date.now();
-  const duration = (endTime - startTime) / 1000; // Convert to seconds
-
+  const duration = (Date.now() - startTime) / 1000;
   console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
   console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
   console.log(chalk.cyan(`- Found ${fileCount} files`));
 
   return allFiles;
 }
+
 
 // Stage 2: Deduplication
 async function deduplicateFiles(
