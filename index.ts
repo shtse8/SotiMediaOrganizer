@@ -98,43 +98,6 @@ class LSH {
   }
 }
 
-class ThreadSafeLSH {
-  private lsh: LSH;
-  private mutex: Mutex;
-
-  constructor(hashSize: number = 64, numBands: number = 8) {
-    this.lsh = new LSH(hashSize, numBands);
-    this.mutex = new Mutex();
-  }
-
-  async add(hash: string, identifier: string) {
-    const release = await this.mutex.acquire();
-    try {
-      this.lsh.add(hash, identifier);
-    } finally {
-      release();
-    }
-  }
-
-  async remove(hash: string, identifier: string) {
-    const release = await this.mutex.acquire();
-    try {
-      this.lsh.remove(hash, identifier);
-    } finally {
-      release();
-    }
-  }
-
-  async getCandidates(hash: string): Promise<Set<string>> {
-    const release = await this.mutex.acquire();
-    try {
-      return this.lsh.getCandidates(hash);
-    } finally {
-      release();
-    }
-  }
-}
-
 
 // Stage 1: File Discovery
 async function discoverFiles(sourceDirs: string[], concurrency: number = 10, logInterval: number = 10000): Promise<string[]> {
@@ -198,7 +161,7 @@ async function deduplicateFiles(
   resolution: number,
   hammingThreshold: number,
   existingFiles: Map<string, FileInfo>,
-  lsh: ThreadSafeLSH,
+  lsh: LSH,
   concurrency: number = 10
 ): Promise<{
   uniqueFiles: Map<string, FileInfo>,
@@ -247,6 +210,7 @@ async function deduplicateFiles(
 
   // Initialize semaphore for concurrency control
   const semaphore = new Semaphore(concurrency);
+  const duplicateFileMutex = new Mutex();
 
   async function addUniqueFile(fileInfo: FileInfo) {
     uniqueFiles.set(fileInfo.hash, fileInfo);
@@ -275,43 +239,50 @@ async function deduplicateFiles(
 
       const fileInfo = await getFileInfo(filePath, resolution);
 
-      let isDuplicate = false;
+      // Acquire the mutex for the critical section
+      const release = await duplicateFileMutex.acquire();
 
-      // Check for exact duplicates
-      if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
-        const existingFile = existingFiles.get(fileInfo.hash) || uniqueFiles.get(fileInfo.hash)!;
-        const bestFile = selectBestFile([existingFile, fileInfo]);
-        if (bestFile.path === filePath) {
-          await replaceExistingFile(fileInfo, existingFile);
-        } else {
-          duplicates.set(filePath, existingFile.path);
-        }
-        isDuplicate = true;
-      } 
-      // Check for perceptually similar images
-      else if (fileInfo.perceptualHash && isImageFile(filePath)) {
-        const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
-        for (const candidateHash of candidates) {
-          const simpleHash = perceptualHashMap.get(candidateHash);
-          if (simpleHash) {
-            const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
-            if (existingFile && existingFile.perceptualHash &&
-              hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
-              const bestFile = selectBestFile([existingFile, fileInfo]);
-              if (bestFile.path === filePath) {
-                await replaceExistingFile(fileInfo, existingFile);
-              } else {
-                duplicates.set(filePath, existingFile.path);
+      try {
+        let isDuplicate = false;
+
+        // Check for exact duplicates
+        if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
+          const existingFile = existingFiles.get(fileInfo.hash) || uniqueFiles.get(fileInfo.hash)!;
+          const bestFile = selectBestFile([existingFile, fileInfo]);
+          if (bestFile.path === filePath) {
+            await replaceExistingFile(fileInfo, existingFile);
+          } else {
+            duplicates.set(filePath, existingFile.path);
+          }
+          isDuplicate = true;
+        } 
+        // Check for perceptually similar images
+        else if (fileInfo.perceptualHash && isImageFile(filePath)) {
+          const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
+          for (const candidateHash of candidates) {
+            const simpleHash = perceptualHashMap.get(candidateHash);
+            if (simpleHash) {
+              const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
+              if (existingFile && existingFile.perceptualHash &&
+                hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
+                const bestFile = selectBestFile([existingFile, fileInfo]);
+                if (bestFile.path === filePath) {
+                  await replaceExistingFile(fileInfo, existingFile);
+                } else {
+                  duplicates.set(filePath, existingFile.path);
+                }
+                isDuplicate = true;
+                break;
               }
-              isDuplicate = true;
-              break;
             }
           }
         }
-      }
 
-      if (!isDuplicate) {
-        await addUniqueFile(fileInfo);
+        if (!isDuplicate) {
+          await addUniqueFile(fileInfo);
+        }
+      } finally {
+        release();
       }
 
       formatBar?.increment({ duplicates: duplicates.size });
@@ -486,7 +457,6 @@ async function processImageFile(filePath: string, resolution: number): Promise<{
     image.metadata()
   ]);
 
-
   // Calculate perceptual hash
   let hash = '';
   const pixelCount = resolution * resolution;
@@ -608,7 +578,7 @@ async function main() {
 
   // Stage 2: Deduplication
   console.log(chalk.blue('\nStage 2: Deduplicating files...'));
-  const lsh = new ThreadSafeLSH();
+  const lsh = new LSH();
   const existingFiles = new Map<string, FileInfo>(); // In a real scenario, you might want to populate this with files from the target directory
   const { uniqueFiles, duplicates } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold, existingFiles, lsh);
 
