@@ -139,11 +139,13 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-const execAsync = promisify(exec);
-
-async function getNativeFileList(sourceDirs: string[]): Promise<string[]> {
+// Native Command-Based Method
+async function getNativeFileList(sourceDirs: string[], logInterval: number = 1000): Promise<string[]> {
   const isWindows = process.platform === 'win32';
   let allFiles: string[] = [];
+  let fileCount = 0;
+  let dirCount = 0;
+  let lastLogFileCount = 0;
 
   const execCommandWithStream = (command: string, args: string[]): Promise<string[]> => {
       return new Promise((resolve, reject) => {
@@ -152,6 +154,17 @@ async function getNativeFileList(sourceDirs: string[]): Promise<string[]> {
 
           child.stdout.on('data', (data) => {
               stdoutData += data.toString();
+
+              // Increment file count based on the number of lines (files) received
+              const newFiles = stdoutData.split('\n').filter(line => line.trim() !== '');
+              const newFileCount = newFiles.length;
+              fileCount += newFileCount;
+
+              // Log progress
+              if (fileCount - lastLogFileCount >= logInterval) {
+                  lastLogFileCount = fileCount;
+                  console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+              }
           });
 
           child.stderr.on('data', (data) => {
@@ -173,13 +186,11 @@ async function getNativeFileList(sourceDirs: string[]): Promise<string[]> {
   };
 
   if (isWindows) {
-      // Handle Windows-specific command using forfiles with chunked patterns
-      const maxPatternLength = 253; // Max characters for the /m option
+      const maxPatternLength = 253;
       const extensionChunks: string[][] = [];
       let currentChunk: string[] = [];
-
-      // Break extensions into chunks
       let currentLength = 0;
+
       for (const ext of ALL_SUPPORTED_EXTENSIONS) {
           const extPattern = `*.${ext}`;
           if (currentLength + extPattern.length + 1 > maxPatternLength) {
@@ -197,44 +208,68 @@ async function getNativeFileList(sourceDirs: string[]): Promise<string[]> {
       const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
 
       for (const chunk of extensionChunks) {
+          dirCount++;
           const pattern = chunk.join(' ');
           const command = `forfiles /s /p ${dirList} /m "${pattern}" /c "cmd /c echo @path"`;
           const files = await execCommandWithStream(command, []);
           allFiles.push(...files);
       }
   } else {
-      // Handle Unix-like command using find
       const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `-name "*.${ext}"`).join(' -o ');
       const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
-      const command = `find ${dirList} -type f \\( ${extensionPattern} \\)`;
-      const files = await execCommandWithStream(command, []);
-      allFiles.push(...files);
+
+      for (const dir of sourceDirs) {
+          dirCount++;
+          const command = `find "${dir}" -type f \\( ${extensionPattern} \\)`;
+          const files = await execCommandWithStream(command, []);
+          allFiles.push(...files);
+      }
   }
 
   return allFiles;
 }
 
-async function discoverFilesWithNode(sourceDirs: string[], concurrency: number = 20): Promise<string[]> {
+// Node.js-Based Method
+async function discoverFilesWithNode(sourceDirs: string[], concurrency: number = 20, logInterval: number = 1000): Promise<string[]> {
   const allFiles: string[] = [];
-  const supportedExtensionsSet = new Set(ALL_SUPPORTED_EXTENSIONS);
+  let dirCount = 0;
+  let fileCount = 0;
+  let lastLogFileCount = 0;
+  const startTime = Date.now();
+  const semaphore = new Semaphore(concurrency);
 
   const scanDirectory = async (dirPath: string): Promise<void> => {
-    const entries = await readdir(dirPath, { withFileTypes: true });
+      const [_, release] = await semaphore.acquire();
+      try {
+          dirCount++;
+          const entries = await readdir(dirPath, { withFileTypes: true });
 
-    await Promise.all(entries.map(async entry => {
-      const entryPath = join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        await scanDirectory(entryPath);
-      } else {
-        const fileExt = extname(entry.name).slice(1).toLowerCase();
-        if (supportedExtensionsSet.has(fileExt)) {
-          allFiles.push(entryPath);
-        }
+          await Promise.all(entries.map(async entry => {
+              const entryPath = join(dirPath, entry.name);
+              if (entry.isDirectory()) {
+                  await scanDirectory(entryPath);
+              } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
+                  allFiles.push(entryPath);
+                  fileCount++;
+
+                  // Log progress after every logInterval files
+                  if (fileCount - lastLogFileCount >= logInterval) {
+                      lastLogFileCount = fileCount;
+                      console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+                  }
+              }
+          }));
+      } finally {
+          release();
       }
-    }));
   };
 
   await Promise.all(sourceDirs.map(dirPath => scanDirectory(dirPath)));
+
+  const duration = (Date.now() - startTime) / 1000;
+  console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
+  console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
+  console.log(chalk.cyan(`- Found ${fileCount} files`));
 
   return allFiles;
 }
