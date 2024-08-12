@@ -33,7 +33,10 @@ interface FileInfo {
   size: number;
   hash: string;
   perceptualHash?: string;
-  metadata: any;
+  
+  imageDate: Date;
+  hasGeolocation: boolean;
+  metadataCount: number;
   quality?: number;
 }
 
@@ -320,14 +323,12 @@ async function deduplicateFiles(
 function selectBestFile(files: FileInfo[]): FileInfo {
   return files.reduce((best, current) => {
     // Prioritize files with geolocation data
-    if (current.metadata.GPSLatitude && !best.metadata.GPSLatitude) return current;
-    if (best.metadata.GPSLatitude && !current.metadata.GPSLatitude) return best;
+    if (current.hasGeolocation && !best.hasGeolocation) return current;
+    if (best.hasGeolocation && !current.hasGeolocation) return best;
 
     // Prioritize files with more metadata
-    const currentMetadataCount = Object.keys(current.metadata).length;
-    const bestMetadataCount = Object.keys(best.metadata).length;
-    if (currentMetadataCount > bestMetadataCount) return current;
-    if (bestMetadataCount > currentMetadataCount) return best;
+    if (current.metadataCount > best.metadataCount) return current;
+    if (best.metadataCount > current.metadataCount) return best;
 
     // For images, prioritize higher quality
     if (current.quality && best.quality) {
@@ -362,10 +363,7 @@ async function transferFiles(
   progressBar.start(totalFiles, 0);
 
   for (const [, fileInfo] of uniqueFiles) {
-    const date = fileInfo.metadata.DateTimeOriginal ? new Date(fileInfo.metadata.DateTimeOriginal) :
-                 fileInfo.metadata.CreateDate ? new Date(fileInfo.metadata.CreateDate) :
-                 new Date();
-    const targetPath = generateTargetPath(format, targetDir, date, basename(fileInfo.path));
+    const targetPath = generateTargetPath(format, targetDir, fileInfo.imageDate, basename(fileInfo.path));
     await transferFile(fileInfo.path, targetPath, shouldMove);
     processed++;
     progressBar.update(processed);
@@ -494,7 +492,11 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
     path: filePath,
     size: fileStat.size,
     hash,
-    metadata,
+    imageDate: metadata.DateTimeOriginal ? new Date(metadata.DateTimeOriginal) :
+      metadata.CreateDate ? new Date(metadata.CreateDate) :
+      new Date(),
+    hasGeolocation: metadata.GPSLatitude && metadata.GPSLongitude,
+    metadataCount: Object.keys(metadata).length,
     perceptualHash: imageInfo.perceptualHash,
     quality: imageInfo.quality
   };
