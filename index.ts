@@ -108,7 +108,6 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   const semaphore = new Semaphore(concurrency);
   const supportedExtensions = new Set(ALL_SUPPORTED_EXTENSIONS);
   const spinner = ora('Discovering files...').start();
-  const promises: Promise<void>[] = [];
 
   async function scanDirectory(dirPath: string): Promise<void> {
     try {
@@ -118,7 +117,7 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
       for (const entry of entries) {
         const entryPath = join(dirPath, entry.name);
         if (entry.isDirectory()) {
-          promises.push(semaphore.runExclusive(() => scanDirectory(entryPath)));
+          semaphore.runExclusive(() => scanDirectory(entryPath));
         } else if (supportedExtensions.has(extname(entry.name).slice(1).toLowerCase())) {
           allFiles.push(entryPath);
           fileCount++;
@@ -137,11 +136,9 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   }
 
   // Start scanning all source directories
-  sourceDirs.forEach((dirPath) => {
-    promises.push(semaphore.runExclusive(() => scanDirectory(dirPath)));
-  });
+  sourceDirs.forEach((dirPath) => semaphore.runExclusive(() => scanDirectory(dirPath)));
 
-  await Promise.all(promises);
+  await semaphore.waitForUnlock(concurrency);
 
   const duration = (Date.now() - startTime) / 1000;
 
@@ -304,11 +301,9 @@ async function deduplicateFiles(
   }
 
   // Process all files
-  await Promise.all(files.map((filePath) => 
-    semaphore.runExclusive(() => 
-      processFile(filePath)
-    )
-  ));
+  files.forEach((filePath) => semaphore.runExclusive(() => processFile(filePath)));
+
+  await semaphore.waitForUnlock(concurrency);
 
   multibar.stop();
 
