@@ -367,14 +367,23 @@ async function calculatePerceptualHash(filePath: string, resolution: number): Pr
 }
 
 async function convertHeicToJpeg(inputPath: string): Promise<Buffer> {
-  const inputBuffer = await readFile(inputPath);
-  const arrayBuffer = inputBuffer.buffer.slice(inputBuffer.byteOffset, inputBuffer.byteOffset + inputBuffer.byteLength);
-  const convertedBuffer = await heicConvert({
-    buffer: arrayBuffer,
-    format: 'JPEG',
-    quality: 1
-  });
-  return Buffer.from(convertedBuffer);
+  try {
+    const inputBuffer = await readFile(inputPath);
+    
+    // Ensure we're passing a Uint8Array to heic-convert
+    const uint8Array = new Uint8Array(inputBuffer);
+
+    const convertedBuffer = await heicConvert({
+      buffer: uint8Array,
+      format: 'JPEG',
+      quality: 1
+    });
+
+    return Buffer.from(convertedBuffer);
+  } catch (error) {
+    console.error(`Error converting HEIC to JPEG: ${error}`);
+    throw error;
+  }
 }
 
 function isImageFile(filePath: string): boolean {
