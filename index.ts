@@ -172,7 +172,6 @@ async function deduplicateFiles(
   formatCounts: Map<string, number>,
   errorCount: number
 }> {
-  const uniqueFiles = new Map<string, FileInfo>();
   const duplicates = new Map<string, string>();
   const perceptualHashMap = new Map<string, string>();
   const formatCounts = new Map<string, number>();
@@ -216,17 +215,17 @@ async function deduplicateFiles(
   const duplicateFileMutex = new Mutex();
 
   async function addUniqueFile(fileInfo: FileInfo) {
-    uniqueFiles.set(fileInfo.hash, fileInfo);
+    existingFiles.set(fileInfo.hash, fileInfo);
     if (fileInfo.perceptualHash) {
-      await lsh.add(fileInfo.perceptualHash, fileInfo.hash);
+      lsh.add(fileInfo.perceptualHash, fileInfo.hash);
       perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
     }
   }
 
   async function replaceExistingFile(newFile: FileInfo, existingFile: FileInfo) {
-    uniqueFiles.delete(existingFile.hash);
+    existingFiles.delete(existingFile.hash);
     if (existingFile.perceptualHash) {
-      await lsh.remove(existingFile.perceptualHash, existingFile.hash);
+      lsh.remove(existingFile.perceptualHash, existingFile.hash);
       perceptualHashMap.delete(existingFile.perceptualHash);
     }
     await addUniqueFile(newFile);
@@ -249,8 +248,8 @@ async function deduplicateFiles(
         let isDuplicate = false;
 
         // Check for exact duplicates
-        if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
-          const existingFile = existingFiles.get(fileInfo.hash) || uniqueFiles.get(fileInfo.hash)!;
+        if (existingFiles.has(fileInfo.hash)) {
+          const existingFile = existingFiles.get(fileInfo.hash)!;
           const bestFile = selectBestFile([existingFile, fileInfo]);
           if (bestFile.path === filePath) {
             await replaceExistingFile(fileInfo, existingFile);
@@ -265,7 +264,7 @@ async function deduplicateFiles(
           for (const candidateHash of candidates) {
             const simpleHash = perceptualHashMap.get(candidateHash);
             if (simpleHash) {
-              const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
+              const existingFile = existingFiles.get(simpleHash);
               if (existingFile && existingFile.perceptualHash &&
                 hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
                 const bestFile = selectBestFile([existingFile, fileInfo]);
