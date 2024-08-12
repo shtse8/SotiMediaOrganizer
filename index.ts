@@ -136,7 +136,7 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-async function discoverFiles(sourceDirs: string[], concurrency: number = 20, logInterval: number = 1000): Promise<string[]> {
+async function discoverFiles(sourceDirs: string[], concurrency: number = 10, logInterval: number = 1000): Promise<string[]> {
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
