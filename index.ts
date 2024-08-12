@@ -103,7 +103,6 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
-  let lastLogFileCount = 0;
   const startTime = Date.now();
   const semaphore = new Semaphore(concurrency);
   const supportedExtensions = new Set(ALL_SUPPORTED_EXTENSIONS);
@@ -121,14 +120,8 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
         } else if (supportedExtensions.has(extname(entry.name).slice(1).toLowerCase())) {
           allFiles.push(entryPath);
           fileCount++;
-
-          // Log progress after every logInterval files
-          // if (fileCount - lastLogFileCount >= logInterval) {
-            lastLogFileCount = fileCount;
-            // console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
-            spinner.text = `Processed ${dirCount} directories, found ${fileCount} files...`;
-          // }
         }
+        spinner.text = `Processed ${dirCount} directories, found ${fileCount} files...`;
       }
     } catch (error) {
       console.error(chalk.red(`Error scanning directory ${dirPath}:`, error));
