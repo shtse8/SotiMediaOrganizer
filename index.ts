@@ -162,23 +162,32 @@ class ThreadSafeLSH {
     }
   }
 }
-async function calculatePartialFileHash(filePath: string, chunkSize = 1024 * 1024): Promise<string> {
+async function calculateFileHash(filePath: string, maxChunkSize = 1024 * 1024 * 2): Promise<string> {
   const hash = createHash('md5');
   const fileHandle = await open(filePath, 'r');
 
   try {
     const fileSize = (await fileHandle.stat()).size;
 
-    // Read first chunk
-    const bufferStart = Buffer.alloc(chunkSize);
-    await fileHandle.read(bufferStart, 0, chunkSize, 0);
-    hash.update(bufferStart);
+    if (fileSize > maxChunkSize) {
+      // For large files, use partial hashing (first and last chunk)
+      const chunkSize = maxChunkSize / 2;
 
-    // Read last chunk if the file is larger than the chunk size
-    if (fileSize > chunkSize) {
-      const bufferEnd = Buffer.alloc(chunkSize);
-      await fileHandle.read(bufferEnd, 0, chunkSize, fileSize - chunkSize);
-      hash.update(bufferEnd);
+      // Read first chunk
+      const bufferStart = Buffer.alloc(chunkSize);
+      await fileHandle.read(bufferStart, 0, chunkSize, 0);
+      hash.update(bufferStart);
+
+      // Read last chunk if the file is larger than the chunk size
+      if (fileSize > chunkSize) {
+        const bufferEnd = Buffer.alloc(chunkSize);
+        await fileHandle.read(bufferEnd, 0, chunkSize, fileSize - chunkSize);
+        hash.update(bufferEnd);
+      }
+    } else {
+      // For small files, hash the entire file
+      const fileBuffer = await fileHandle.readFile();
+      hash.update(fileBuffer);
     }
   } finally {
     await fileHandle.close();
@@ -189,13 +198,7 @@ async function calculatePartialFileHash(filePath: string, chunkSize = 1024 * 102
 
 async function calculateFileHashes(filePath: string, resolution: number): Promise<{ hash: string, perceptualHash?: string }> {
   // Use partial hash for large files
-  const fileStat = await stat(filePath);
-  let hash;
-  if (fileStat.size > 1024 * 1024 * 100) { // e.g., files larger than 100MB
-    hash = await calculatePartialFileHash(filePath);
-  } else {
-    hash = await calculateSimpleFileHash(filePath); // Full hash for smaller files
-  }
+  const hash = await calculateFileHash(filePath);
 
   let perceptualHash;
   if (isImageFile(filePath)) {
@@ -253,11 +256,6 @@ async function calculatePerceptualHash(filePath: string, resolution: number): Pr
   }
 
   return hash;
-}
-
-async function calculateSimpleFileHash(filePath: string): Promise<string> {
-  const fileBuffer = await Bun.file(filePath).arrayBuffer();
-  return createHash('md5').update(Buffer.from(fileBuffer)).digest('hex');
 }
 
 function isImageFile(filePath: string): boolean {
