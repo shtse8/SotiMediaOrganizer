@@ -193,22 +193,20 @@ async function deduplicateFiles(
   lsh: ThreadSafeLSH
 ): Promise<{
   uniqueFiles: Map<string, FileInfo>,
-  duplicates: Map<string, string>,
-  similarFiles: Map<string, string>
+  duplicates: Map<string, string>
 }> {
   const uniqueFiles = new Map<string, FileInfo>();
   const duplicates = new Map<string, string>();
-  const similarFiles = new Map<string, string>();
   const perceptualHashMap = new Map<string, string>();
 
   const progressBar = new cliProgress.SingleBar({
-    format: 'Deduplicating |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Files || Duplicates: {duplicates} | Similar: {similar}',
+    format: 'Deduplicating |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Files || Duplicates: {duplicates} | ETA: {eta_formatted}',
     barCompleteChar: '\u2588',
     barIncompleteChar: '\u2591',
     hideCursor: true
   });
 
-  progressBar.start(files.length, 0, { duplicates: 0, similar: 0 });
+  progressBar.start(files.length, 0, { duplicates: 0 });
 
   for (let i = 0; i < files.length; i++) {
     const filePath = files[i];
@@ -218,20 +216,20 @@ async function deduplicateFiles(
       duplicates.set(filePath, existingFiles.get(fileInfo.hash)?.path || uniqueFiles.get(fileInfo.hash)!.path);
     } else if (fileInfo.perceptualHash && isImageFile(filePath)) {
       const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
-      let isSimilar = false;
+      let isDuplicate = false;
       for (const candidateHash of candidates) {
         const simpleHash = perceptualHashMap.get(candidateHash);
         if (simpleHash) {
           const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
           if (existingFile && existingFile.perceptualHash &&
               hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
-            similarFiles.set(filePath, existingFile.path);
-            isSimilar = true;
+            duplicates.set(filePath, existingFile.path);
+            isDuplicate = true;
             break;
           }
         }
       }
-      if (!isSimilar) {
+      if (!isDuplicate) {
         uniqueFiles.set(fileInfo.hash, fileInfo);
         await lsh.add(fileInfo.perceptualHash, fileInfo.hash);
         perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
@@ -240,16 +238,15 @@ async function deduplicateFiles(
       uniqueFiles.set(fileInfo.hash, fileInfo);
     }
 
-    progressBar.update(i + 1, { duplicates: duplicates.size, similar: similarFiles.size });
+    progressBar.update(i + 1, { duplicates: duplicates.size });
   }
 
   progressBar.stop();
   console.log(chalk.green(`\nDeduplication completed:`));
   console.log(chalk.blue(`- ${uniqueFiles.size} unique files`));
-  console.log(chalk.yellow(`- ${duplicates.size} exact duplicates`));
-  console.log(chalk.yellow(`- ${similarFiles.size} similar files`));
+  console.log(chalk.yellow(`- ${duplicates.size} duplicates`));
 
-  return { uniqueFiles, duplicates, similarFiles };
+  return { uniqueFiles, duplicates };
 }
 
 // Stage 3: File Transfer
