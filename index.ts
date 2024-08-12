@@ -210,6 +210,7 @@ async function deduplicateFiles(
   const perceptualHashMap = new Map<string, string>();
   const formatCounts = new Map<string, number>();
   let errorCount = 0;
+  let processedCount = 0;
 
   // Count the number of files for each format
   const formatFileCounts = files.reduce((acc, file) => {
@@ -221,10 +222,10 @@ async function deduplicateFiles(
   // Initialize MultiBar
   const multibar = new cliProgress.MultiBar({
     hideCursor: true,
-    format: ' |{bar}| {percentage}% || {value}/{total} {format} Files || Duplicates: {duplicates} | Errors: {errors}',
+    format: ' {bar} | {percentage}% | {value}/{total} {format} Files | Duplicates: {duplicates} | Errors: {errors}',
     barCompleteChar: '\u2588',
     barIncompleteChar: '\u2591'
-  });
+  }, cliProgress.Presets.shades_classic);
 
   // Initialize individual progress bars for each format
   const formatBars: Map<string, cliProgress.SingleBar> = new Map();
@@ -232,6 +233,14 @@ async function deduplicateFiles(
   for (const [ext, count] of Object.entries(formatFileCounts)) {
     formatBars.set(ext, multibar.create(count, 0, { format: ext, duplicates: 0, errors: 0 }));
   }
+
+  // Initialize overall progress bar
+  const totalFiles = files.length;
+  const overallBar = multibar.create(totalFiles, 0, {
+    format: 'Overall Progress',
+    duplicates: 0,
+    errors: 0
+  });
 
   // Initialize semaphore for concurrency control
   const semaphore = new Semaphore(concurrency);
@@ -303,9 +312,13 @@ async function deduplicateFiles(
       }
 
       formatBar?.increment({ duplicates: duplicates.size });
+      processedCount++;
+      overallBar.update(processedCount, { duplicates: duplicates.size, errors: errorCount });
     } catch (error) {
       errorCount++;
       formatBar?.increment({ errors: errorCount });
+      processedCount++;
+      overallBar.update(processedCount, { duplicates: duplicates.size, errors: errorCount });
     }
   }
 
@@ -494,7 +507,7 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
     getMetadata(filePath),
     isImageFile(filePath) 
       ? processImageFile(filePath, resolution).catch(error => {
-          console.warn(`Could not process image file ${filePath}: ${error}`);
+          // console.warn(`Could not process image file ${filePath}: ${error}`);
           return { perceptualHash: undefined, quality: undefined };
         })
       : Promise.resolve({ perceptualHash: undefined, quality: undefined })
