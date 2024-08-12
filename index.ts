@@ -8,7 +8,7 @@ import { createHash } from 'crypto';
 import cliProgress from 'cli-progress';
 import chalk from 'chalk';
 import { Buffer } from 'buffer';
-import colors from 'ansi-colors';
+import ora from 'ora';
 
 // Initialize ExifTool
 const exiftool = new ExifTool();
@@ -22,11 +22,7 @@ const SUPPORTED_EXTENSIONS = {
            'm2ts', 'mts', 'ts', 'qt', 'wmv', 'asf', 'flv', 'f4v', 'webm', 'divx']
 };
 
-const ALL_SUPPORTED_EXTENSIONS = [
-  ...SUPPORTED_EXTENSIONS.images,
-  ...SUPPORTED_EXTENSIONS.rawImages,
-  ...SUPPORTED_EXTENSIONS.videos
-];
+const ALL_SUPPORTED_EXTENSIONS = Object.values(SUPPORTED_EXTENSIONS).flat();
 
 interface FileInfo {
   path: string;
@@ -110,6 +106,9 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   let lastLogFileCount = 0;
   const startTime = Date.now();
   const semaphore = new Semaphore(concurrency);
+  const supportedExtensions = new Set(ALL_SUPPORTED_EXTENSIONS);
+  const spinner = ora('Discovering files...').start();
+  const promises: Promise<void>[] = [];
 
   async function scanDirectory(dirPath: string): Promise<void> {
     try {
@@ -119,19 +118,17 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
       for (const entry of entries) {
         const entryPath = join(dirPath, entry.name);
         if (entry.isDirectory()) {
-          const [_, release] = await semaphore.acquire();
-          scanDirectory(entryPath).finally(() => {
-            release();
-          });
-        } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
+          promises.push(semaphore.runExclusive(() => scanDirectory(entryPath)));
+        } else if (supportedExtensions.has(extname(entry.name).slice(1).toLowerCase())) {
           allFiles.push(entryPath);
           fileCount++;
 
           // Log progress after every logInterval files
-          if (fileCount - lastLogFileCount >= logInterval) {
+          // if (fileCount - lastLogFileCount >= logInterval) {
             lastLogFileCount = fileCount;
-            console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
-          }
+            // console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+            spinner.text = `Processed ${dirCount} directories, found ${fileCount} files...`;
+          // }
         }
       }
     } catch (error) {
@@ -140,20 +137,15 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   }
 
   // Start scanning all source directories
-  for (const dirPath of sourceDirs) {
-    const [_, release] = await semaphore.acquire();
-    scanDirectory(dirPath).finally(() => {
-      release();
-    });
-  }
+  sourceDirs.forEach((dirPath) => {
+    promises.push(semaphore.runExclusive(() => scanDirectory(dirPath)));
+  });
 
-  // Wait for all scanning processes to complete
-  await semaphore.waitForUnlock(concurrency);
+  await Promise.all(promises);
 
   const duration = (Date.now() - startTime) / 1000;
-  console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
-  console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
-  console.log(chalk.cyan(`- Found ${fileCount} files`));
+
+  spinner.succeed(`Discovery completed in ${duration.toFixed(2)} seconds: Found ${fileCount} files in ${dirCount} directories`);
 
   return allFiles;
 }
@@ -188,12 +180,10 @@ async function deduplicateFiles(
   // Count the number of files for each format
   for (const file of files) {
     const ext = extname(file).slice(1).toLowerCase();
-    
     if (!formatStats.has(ext)) {
       formatStats.set(ext, { count: 1, duplicates: 0, errors: 0 });
     } else {
-      const stats = formatStats.get(ext)!;
-      stats.count++;
+      formatStats.get(ext)!.count++;
     }
   }
 
@@ -209,7 +199,7 @@ async function deduplicateFiles(
 
   for (const [ext, stats] of formatStats.entries()) {
     formatBars.set(ext, multibar.create(stats.count, 0, { format: ext.padEnd(7, ' '), duplicates: 0, errors: 0 }, {
-      format: colors.grey('{format} {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
+      format: chalk.grey('{format} {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
      }));
   }
 
@@ -219,7 +209,7 @@ async function deduplicateFiles(
     duplicates: 0,
     errors: 0
   }, {
-    format: colors.white('Overall {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
+    format: chalk.white('Overall {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
   });
 
   // Initialize semaphore for concurrency control
@@ -258,9 +248,7 @@ async function deduplicateFiles(
       const fileInfo = await getFileInfo(filePath, resolution);
 
       // Acquire the mutex for the critical section
-      const release = await duplicateFileMutex.acquire();
-
-      try {
+      await duplicateFileMutex.runExclusive(async () => {
         let isDuplicate = false;
 
         // Check for exact duplicates
@@ -301,15 +289,14 @@ async function deduplicateFiles(
         if (!isDuplicate) {
           await addUniqueFile(fileInfo);
         }
-      } finally {
-        release();
-      }
+      });
 
       formatBar?.increment({ duplicates: stats.duplicates });
       processedCount++;
       overallBar.update(processedCount, { duplicates: duplicates.size, errors: errorCount });
     } catch (error) {
       errorCount++;
+      stats.errors++;
       formatBar?.increment({ errors: stats.errors });
       processedCount++;
       overallBar.update(processedCount, { duplicates: duplicates.size, errors: errorCount });
@@ -317,15 +304,11 @@ async function deduplicateFiles(
   }
 
   // Process all files
-  for (const filePath of files) {
-    const [_, release] = await semaphore.acquire();
-    processFile(filePath).finally(() => {
-      release();
-    });
-  }
-
-  // Wait for all processes to complete
-  await semaphore.waitForUnlock(concurrency);
+  await Promise.all(files.map((filePath) => 
+    semaphore.runExclusive(() => 
+      processFile(filePath)
+    )
+  ));
 
   multibar.stop();
 
@@ -580,9 +563,11 @@ async function main() {
   const options = program.opts() as ProgramOptions;
 
   // Create necessary directories
-  await mkdir(options.target, { recursive: true });
-  if (options.error) await mkdir(options.error, { recursive: true });
-  if (options.duplicate) await mkdir(options.duplicate, { recursive: true });
+  await Promise.all([
+    mkdir(options.target, { recursive: true }),
+    options.error ? mkdir(options.error, { recursive: true }) : Promise.resolve(),
+    options.duplicate ? mkdir(options.duplicate, { recursive: true }) : Promise.resolve()
+  ]);
 
   const resolution = parseInt(options.resolution, 10);
   if (resolution <= 0) {
