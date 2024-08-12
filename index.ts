@@ -226,7 +226,29 @@ async function deduplicateFiles(
   // Initialize semaphore for concurrency control
   const semaphore = new Semaphore(concurrency);
 
-  // Concurrently process files
+  async function addUniqueFile(fileInfo: FileInfo) {
+    uniqueFiles.set(fileInfo.hash, fileInfo);
+    if (fileInfo.perceptualHash) {
+      await lsh.add(fileInfo.perceptualHash, fileInfo.hash);
+      perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
+    }
+  }
+
+  async function replaceExistingFile(newFile: FileInfo, existingFile: FileInfo) {
+    // Remove existing file from data structures
+    uniqueFiles.delete(existingFile.hash);
+    if (existingFile.perceptualHash) {
+      await lsh.remove(existingFile.perceptualHash, existingFile.hash);
+      perceptualHashMap.delete(existingFile.perceptualHash);
+    }
+
+    // Add new file to data structures
+    await addUniqueFile(newFile);
+
+    // Update duplicates map
+    duplicates.set(existingFile.path, newFile.path);
+  }
+
   await Promise.all(files.map(async (filePath) => {
     const [_, release] = await semaphore.acquire();
     try {
@@ -238,37 +260,48 @@ async function deduplicateFiles(
 
         const fileInfo = await getFileInfo(filePath, resolution);
 
+        let isDuplicate = false;
+
+        // Check for exact duplicates
         if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
-          duplicates.set(filePath, existingFiles.get(fileInfo.hash)?.path || uniqueFiles.get(fileInfo.hash)!.path);
-          formatBar?.increment({ duplicates: duplicates.size });
-        } else if (fileInfo.perceptualHash && isImageFile(filePath)) {
+          const existingFile = existingFiles.get(fileInfo.hash) || uniqueFiles.get(fileInfo.hash)!;
+          const bestFile = selectBestFile([existingFile, fileInfo]);
+          if (bestFile.path === filePath) {
+            await replaceExistingFile(fileInfo, existingFile);
+          } else {
+            duplicates.set(filePath, existingFile.path);
+          }
+          isDuplicate = true;
+        } 
+        // Check for perceptually similar images
+        else if (fileInfo.perceptualHash && isImageFile(filePath)) {
           const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
-          let isDuplicate = false;
           for (const candidateHash of candidates) {
             const simpleHash = perceptualHashMap.get(candidateHash);
             if (simpleHash) {
               const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
               if (existingFile && existingFile.perceptualHash &&
                 hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
-                duplicates.set(filePath, existingFile.path);
+                const bestFile = selectBestFile([existingFile, fileInfo]);
+                if (bestFile.path === filePath) {
+                  await replaceExistingFile(fileInfo, existingFile);
+                } else {
+                  duplicates.set(filePath, existingFile.path);
+                }
                 isDuplicate = true;
                 break;
               }
             }
           }
-          if (!isDuplicate) {
-            uniqueFiles.set(fileInfo.hash, fileInfo);
-            await lsh.add(fileInfo.perceptualHash, fileInfo.hash);
-            perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
-          }
-          formatBar?.increment();
-        } else {
-          uniqueFiles.set(fileInfo.hash, fileInfo);
-          formatBar?.increment();
         }
+
+        if (!isDuplicate) {
+          await addUniqueFile(fileInfo);
+        }
+
+        formatBar?.increment({ duplicates: duplicates.size });
       } catch (error) {
         errorCount++;
-        // console.error(`Error processing ${filePath}:`, error);
         formatBar?.increment({ errors: errorCount });
       }
     } finally {
@@ -284,6 +317,29 @@ async function deduplicateFiles(
   console.log(chalk.red(`- ${errorCount} errors encountered`));
 
   return { uniqueFiles, duplicates, formatCounts, errorCount };
+}
+
+function selectBestFile(files: FileInfo[]): FileInfo {
+  return files.reduce((best, current) => {
+    // Prioritize files with geolocation data
+    if (current.metadata.GPSLatitude && !best.metadata.GPSLatitude) return current;
+    if (best.metadata.GPSLatitude && !current.metadata.GPSLatitude) return best;
+
+    // Prioritize files with more metadata
+    const currentMetadataCount = Object.keys(current.metadata).length;
+    const bestMetadataCount = Object.keys(best.metadata).length;
+    if (currentMetadataCount > bestMetadataCount) return current;
+    if (bestMetadataCount > currentMetadataCount) return best;
+
+    // For images, prioritize higher quality
+    if (current.quality && best.quality) {
+      if (current.quality > best.quality) return current;
+      if (best.quality > current.quality) return best;
+    }
+
+    // If all else is equal, choose the larger file
+    return current.size > best.size ? current : best;
+  });
 }
 
 // Stage 3: File Transfer
