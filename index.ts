@@ -184,7 +184,7 @@ async function getNativeFileList(sourceDirs: string[]): Promise<string[]> {
     const { stdout } = await execAsync(command);
     allFiles.push(...stdout.split('\n').filter(line => line.trim() !== ''));
   }
-  
+
   return allFiles;
 }
 
@@ -221,6 +221,7 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 20): Pr
     console.log(chalk.blue('Attempting to use native commands for file discovery...'));
     allFiles = await getNativeFileList(sourceDirs);
   } catch (e) {
+    console.error(chalk.red('Native command failed:'), e);
     console.warn(chalk.yellow('Native command failed, falling back to Node.js method...'));    
     allFiles = await discoverFilesWithNode(sourceDirs, concurrency);
   }
