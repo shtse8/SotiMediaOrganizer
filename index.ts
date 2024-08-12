@@ -207,7 +207,7 @@ async function deduplicateFiles(
   // Initialize individual progress bars for each format
   const formatBars: Map<string, cliProgress.SingleBar> = new Map();
 
-  for (const [ext, stats] of Object.entries(formatStats)) {
+  for (const [ext, stats] of formatStats.entries()) {
     formatBars.set(ext, multibar.create(stats.count, 0, { format: ext.padEnd(7, ' '), duplicates: 0, errors: 0 }, {
       format: colors.grey('{format} {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
      }));
