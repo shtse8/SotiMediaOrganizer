@@ -268,7 +268,7 @@ async function deduplicateFiles(
         }
       } catch (error) {
         errorCount++;
-        console.error(`Error processing ${filePath}:`, error);
+        // console.error(`Error processing ${filePath}:`, error);
         formatBar?.increment({ errors: errorCount });
       }
     } finally {
