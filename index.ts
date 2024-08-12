@@ -165,7 +165,7 @@ async function deduplicateFiles(
   hammingThreshold: number,
   existingFiles: Map<string, FileInfo>,
   lsh: LSH,
-  concurrency: number = 10
+  concurrency: number = 3
 ): Promise<{
   uniqueFiles: Map<string, FileInfo>,
   duplicates: Map<string, string>,
