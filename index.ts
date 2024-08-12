@@ -139,104 +139,7 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-// Native Command-Based Method
-async function getNativeFileList(sourceDirs: string[], logInterval: number = 1000): Promise<string[]> {
-  const isWindows = process.platform === 'win32';
-  let allFiles: string[] = [];
-  let fileCount = 0;
-  let dirCount = 0;
-  let lastLogFileCount = 0;
-
-  const execCommandWithStream = (command: string, args: string[]): Promise<string[]> => {
-      return new Promise((resolve, reject) => {
-          const child = spawn(command, args, { shell: true });
-          let stdoutData = '';
-
-          child.stdout.on('data', (data) => {
-              stdoutData += data.toString();
-
-              // Split the received data into lines and process them
-              const newLines = stdoutData.split('\n');
-              stdoutData = newLines.pop()!; // Keep the last line for next data chunk
-
-              const newFiles = newLines.filter(line => line.trim() !== '');
-              fileCount += newFiles.length;
-              allFiles.push(...newFiles);
-
-              // Log progress after every logInterval files
-              if (fileCount - lastLogFileCount >= logInterval) {
-                  lastLogFileCount = fileCount;
-                  console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
-              }
-          });
-
-          child.stderr.on('data', (data) => {
-              process.stderr.write(`stderr: ${data}`);
-          });
-
-          child.on('close', (code) => {
-              if (code === 0) {
-                  resolve(allFiles);
-              } else {
-                  reject(new Error(`Command exited with code ${code}`));
-              }
-          });
-
-          child.on('error', (error) => {
-              reject(error);
-          });
-      });
-  };
-
-  if (isWindows) {
-      const maxPatternLength = 253; // Max characters for the /m option
-      const extensionChunks: string[][] = [];
-      let currentChunk: string[] = [];
-      let currentLength = 0;
-
-      for (const ext of ALL_SUPPORTED_EXTENSIONS) {
-          const extPattern = `*.${ext}`;
-          if (currentLength + extPattern.length + 1 > maxPatternLength) {
-              extensionChunks.push(currentChunk);
-              currentChunk = [];
-              currentLength = 0;
-          }
-          currentChunk.push(extPattern);
-          currentLength += extPattern.length + 1;
-      }
-      if (currentChunk.length > 0) {
-          extensionChunks.push(currentChunk);
-      }
-
-      const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
-
-      for (const chunk of extensionChunks) {
-          dirCount++;
-          const pattern = chunk.join(' ');
-          const command = `forfiles /s /p ${dirList} /m "${pattern}" /c "cmd /c echo @path"`;
-          const files = await execCommandWithStream(command, []);
-          allFiles.push(...files);
-      }
-  } else {
-      const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `-name "*.${ext}"`).join(' -o ');
-
-      for (const dir of sourceDirs) {
-          dirCount++;
-          const command = `find "${dir}" -type f \\( ${extensionPattern} \\)`;
-          const files = await execCommandWithStream(command, []);
-          allFiles.push(...files);
-      }
-  }
-
-  console.log(chalk.green(`\nDiscovery completed:`));
-  console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
-  console.log(chalk.cyan(`- Found ${fileCount} files`));
-
-  return allFiles;
-}
-
-// Node.js-Based Method
-async function discoverFilesWithNode(sourceDirs: string[], concurrency: number = 20, logInterval: number = 1000): Promise<string[]> {
+async function discoverFiles(sourceDirs: string[], concurrency: number = 20, logInterval: number = 1000): Promise<string[]> {
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
@@ -276,26 +179,6 @@ async function discoverFilesWithNode(sourceDirs: string[], concurrency: number =
   console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
   console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
   console.log(chalk.cyan(`- Found ${fileCount} files`));
-
-  return allFiles;
-}
-
-async function discoverFiles(sourceDirs: string[], concurrency: number = 20): Promise<string[]> {
-  const startTime = Date.now();
-  let allFiles: string[] = [];
-
-  try {
-    console.log(chalk.blue('Attempting to use native commands for file discovery...'));
-    allFiles = await getNativeFileList(sourceDirs);
-  } catch (e) {
-    console.error(chalk.red('Native command failed:'), e);
-    console.warn(chalk.yellow('Native command failed, falling back to Node.js method...'));    
-    allFiles = await discoverFilesWithNode(sourceDirs, concurrency);
-  }
-
-  const duration = (Date.now() - startTime) / 1000;
-  console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
-  console.log(chalk.cyan(`- Found ${allFiles.length} files`));
 
   return allFiles;
 }
