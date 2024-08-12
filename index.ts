@@ -7,10 +7,7 @@ import sharp from 'sharp';
 import { createHash } from 'crypto';
 import cliProgress from 'cli-progress';
 import chalk from 'chalk';
-import heicConvert from 'heic-convert';
 import { Buffer } from 'buffer';
-import { promisify } from 'util';
-import { exec, spawn  } from 'child_process';
 
 // Initialize ExifTool
 const exiftool = new ExifTool();
@@ -253,13 +250,12 @@ async function deduplicateFiles(
 async function transferFiles(
   uniqueFiles: Map<string, FileInfo>,
   duplicates: Map<string, string>,
-  similarFiles: Map<string, string>,
   targetDir: string,
   duplicateDir: string | undefined,
   format: string,
   shouldMove: boolean
 ): Promise<void> {
-  const totalFiles = uniqueFiles.size + duplicates.size + similarFiles.size;
+  const totalFiles = uniqueFiles.size + duplicates.size;
   let processed = 0;
 
   const progressBar = new cliProgress.SingleBar({
@@ -285,13 +281,6 @@ async function transferFiles(
     for (const [duplicatePath] of duplicates) {
       const targetPath = join(duplicateDir, basename(duplicatePath));
       await transferFile(duplicatePath, targetPath, shouldMove);
-      processed++;
-      progressBar.update(processed);
-    }
-
-    for (const [similarPath] of similarFiles) {
-      const targetPath = join(duplicateDir, basename(similarPath));
-      await transferFile(similarPath, targetPath, shouldMove);
       processed++;
       progressBar.update(processed);
     }
@@ -337,15 +326,7 @@ async function calculateFileHash(filePath: string, maxChunkSize = 1024 * 1024 * 
 }
 
 async function calculatePerceptualHash(filePath: string, resolution: number): Promise<string> {
-  let inputBuffer: Buffer;
-  
-  if (extname(filePath).toLowerCase() === '.heic') {
-    inputBuffer = await convertHeicToJpeg(filePath);
-  } else {
-    inputBuffer = await readFile(filePath);
-  }
-
-  const { data } = await sharp(inputBuffer, { failOnError: false })
+  const { data } = await sharp(filePath, { failOnError: false })
     .resize(resolution, resolution, { fit: 'fill' })
     .greyscale()
     .raw()
@@ -363,25 +344,6 @@ async function calculatePerceptualHash(filePath: string, resolution: number): Pr
   return hash;
 }
 
-async function convertHeicToJpeg(inputPath: string): Promise<Buffer> {
-  try {
-    const inputBuffer = await readFile(inputPath);
-    
-    // Ensure we're passing a Uint8Array to heic-convert
-    const uint8Array = new Uint8Array(inputBuffer);
-
-    const convertedBuffer = await heicConvert({
-      buffer: uint8Array,
-      format: 'JPEG',
-      quality: 1
-    });
-
-    return Buffer.from(convertedBuffer);
-  } catch (error) {
-    console.error(`Error converting HEIC to JPEG: ${error}`);
-    throw error;
-  }
-}
 
 function isImageFile(filePath: string): boolean {
   const ext = extname(filePath).slice(1).toLowerCase();
@@ -407,13 +369,7 @@ async function getMetadata(path: string): Promise<any> {
 
 async function getImageQuality(filePath: string): Promise<number> {
   try {
-    let metadata;
-    if (extname(filePath).toLowerCase() === '.heic') {
-      const jpegBuffer = await convertHeicToJpeg(filePath);
-      metadata = await sharp(jpegBuffer).metadata();
-    } else {
-      metadata = await sharp(filePath).metadata();
-    }
+    const metadata = await sharp(filePath).metadata();
     return (metadata.width || 0) * (metadata.height || 0);
   } catch (error) {
     console.warn(`Could not determine image quality for ${filePath}: ${error}`);
@@ -525,17 +481,16 @@ async function main() {
   console.log(chalk.blue('\nStage 2: Deduplicating files...'));
   const lsh = new ThreadSafeLSH();
   const existingFiles = new Map<string, FileInfo>(); // In a real scenario, you might want to populate this with files from the target directory
-  const { uniqueFiles, duplicates, similarFiles } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold, existingFiles, lsh);
+  const { uniqueFiles, duplicates } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold, existingFiles, lsh);
 
   // Stage 3: File Transfer
   console.log(chalk.blue('\nStage 3: Transferring files...'));
-  await transferFiles(uniqueFiles, duplicates, similarFiles, options.target, options.duplicate, options.format, options.move);
+  await transferFiles(uniqueFiles, duplicates, options.target, options.duplicate, options.format, options.move);
 
   console.log(chalk.green('\nMedia organization completed'));
   console.log(chalk.cyan(`Total files discovered: ${discoveredFiles.length}`));
   console.log(chalk.cyan(`Unique files: ${uniqueFiles.size}`));
   console.log(chalk.yellow(`Exact duplicates: ${duplicates.size}`));
-  console.log(chalk.yellow(`Similar files: ${similarFiles.size}`));
 
   await exiftool.end();
 }
