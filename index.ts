@@ -1,5 +1,5 @@
 import { readdir, stat, mkdir, rename, copyFile, unlink, readFile, open } from 'fs/promises';
-import { join, parse, basename, dirname, extname } from 'path';
+import { join, parse, basename, dirname, extname, relative } from 'path';
 import { Semaphore, Mutex } from 'async-mutex';
 import { ExifTool } from 'exiftool-vendored';
 import { Command } from 'commander';
@@ -47,34 +47,6 @@ interface ProgramOptions {
   resolution: string;
   hamming: string;
   format: string;
-}
-
-interface ProcessingStats {
-  processed: number;
-  duplicates: number;
-  errors: number;
-  replaced: number;
-}
-
-const stats: ProcessingStats = {
-  processed: 0,
-  duplicates: 0,
-  errors: 0,
-  replaced: 0,
-};
-
-const perceptualHashMap = new Map<string, string>(); // Maps perceptualHash -> simpleHash
-
-const progressBar = new cliProgress.SingleBar({
-  format: 'Processing |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Files || Duplicates: {duplicates} | Errors: {errors} | Replaced: {replaced}',
-  barCompleteChar: '\u2588',
-  barIncompleteChar: '\u2591',
-  hideCursor: true
-});
-
-function logMessage(message: string) {
-  console.log(message);
-  progressBar.updateETA();
 }
 
 class LSH {
@@ -162,6 +134,169 @@ class ThreadSafeLSH {
     }
   }
 }
+
+
+// Stage 1: File Discovery
+async function discoverFiles(sourceDirs: string[]): Promise<string[]> {
+  const allFiles: string[] = [];
+  let dirCount = 0;
+  let fileCount = 0;
+  const startTime = Date.now();
+
+  async function scanDirectory(dirPath: string): Promise<void> {
+    dirCount++;
+    const entries = await readdir(dirPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        await scanDirectory(join(dirPath, entry.name));
+      } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(entry.name).slice(1).toLowerCase())) {
+        allFiles.push(join(dirPath, entry.name));
+        fileCount++;
+      }
+    }
+
+    // Periodically log progress
+    if (dirCount % 100 === 0 || fileCount % 1000 === 0) {
+      console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
+    }
+  }
+
+  for (const dirPath of sourceDirs) {
+    await scanDirectory(dirPath);
+  }
+
+  const endTime = Date.now();
+  const duration = (endTime - startTime) / 1000; // Convert to seconds
+
+  console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
+  console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
+  console.log(chalk.cyan(`- Found ${fileCount} files`));
+
+  return allFiles;
+}
+
+// Stage 2: Deduplication
+async function deduplicateFiles(
+  files: string[],
+  resolution: number,
+  hammingThreshold: number,
+  existingFiles: Map<string, FileInfo>,
+  lsh: ThreadSafeLSH
+): Promise<{
+  uniqueFiles: Map<string, FileInfo>,
+  duplicates: Map<string, string>,
+  similarFiles: Map<string, string>
+}> {
+  const uniqueFiles = new Map<string, FileInfo>();
+  const duplicates = new Map<string, string>();
+  const similarFiles = new Map<string, string>();
+  const perceptualHashMap = new Map<string, string>();
+
+  const progressBar = new cliProgress.SingleBar({
+    format: 'Deduplicating |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Files || Duplicates: {duplicates} | Similar: {similar}',
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591',
+    hideCursor: true
+  });
+
+  progressBar.start(files.length, 0, { duplicates: 0, similar: 0 });
+
+  for (let i = 0; i < files.length; i++) {
+    const filePath = files[i];
+    const fileInfo = await getFileInfo(filePath, resolution);
+
+    if (existingFiles.has(fileInfo.hash) || uniqueFiles.has(fileInfo.hash)) {
+      duplicates.set(filePath, existingFiles.get(fileInfo.hash)?.path || uniqueFiles.get(fileInfo.hash)!.path);
+    } else if (fileInfo.perceptualHash && isImageFile(filePath)) {
+      const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
+      let isSimilar = false;
+      for (const candidateHash of candidates) {
+        const simpleHash = perceptualHashMap.get(candidateHash);
+        if (simpleHash) {
+          const existingFile = existingFiles.get(simpleHash) || uniqueFiles.get(simpleHash);
+          if (existingFile && existingFile.perceptualHash &&
+              hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
+            similarFiles.set(filePath, existingFile.path);
+            isSimilar = true;
+            break;
+          }
+        }
+      }
+      if (!isSimilar) {
+        uniqueFiles.set(fileInfo.hash, fileInfo);
+        await lsh.add(fileInfo.perceptualHash, fileInfo.hash);
+        perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
+      }
+    } else {
+      uniqueFiles.set(fileInfo.hash, fileInfo);
+    }
+
+    progressBar.update(i + 1, { duplicates: duplicates.size, similar: similarFiles.size });
+  }
+
+  progressBar.stop();
+  console.log(chalk.green(`\nDeduplication completed:`));
+  console.log(chalk.blue(`- ${uniqueFiles.size} unique files`));
+  console.log(chalk.yellow(`- ${duplicates.size} exact duplicates`));
+  console.log(chalk.yellow(`- ${similarFiles.size} similar files`));
+
+  return { uniqueFiles, duplicates, similarFiles };
+}
+
+// Stage 3: File Transfer
+async function transferFiles(
+  uniqueFiles: Map<string, FileInfo>,
+  duplicates: Map<string, string>,
+  similarFiles: Map<string, string>,
+  targetDir: string,
+  duplicateDir: string | undefined,
+  format: string,
+  shouldMove: boolean
+): Promise<void> {
+  const totalFiles = uniqueFiles.size + duplicates.size + similarFiles.size;
+  let processed = 0;
+
+  const progressBar = new cliProgress.SingleBar({
+    format: 'Transferring |' + chalk.cyan('{bar}') + '| {percentage}% || {value}/{total} Files',
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591',
+    hideCursor: true
+  });
+
+  progressBar.start(totalFiles, 0);
+
+  for (const [, fileInfo] of uniqueFiles) {
+    const date = fileInfo.metadata.DateTimeOriginal ? new Date(fileInfo.metadata.DateTimeOriginal) :
+                 fileInfo.metadata.CreateDate ? new Date(fileInfo.metadata.CreateDate) :
+                 new Date();
+    const targetPath = generateTargetPath(format, targetDir, date, basename(fileInfo.path));
+    await transferFile(fileInfo.path, targetPath, shouldMove);
+    processed++;
+    progressBar.update(processed);
+  }
+
+  if (duplicateDir) {
+    for (const [duplicatePath] of duplicates) {
+      const targetPath = join(duplicateDir, basename(duplicatePath));
+      await transferFile(duplicatePath, targetPath, shouldMove);
+      processed++;
+      progressBar.update(processed);
+    }
+
+    for (const [similarPath] of similarFiles) {
+      const targetPath = join(duplicateDir, basename(similarPath));
+      await transferFile(similarPath, targetPath, shouldMove);
+      processed++;
+      progressBar.update(processed);
+    }
+  }
+
+  progressBar.stop();
+  console.log(chalk.green(`\nFile transfer completed: ${processed} files processed`));
+}
+
+// Helper functions
 async function calculateFileHash(filePath: string, maxChunkSize = 1024 * 1024 * 2): Promise<string> {
   const hash = createHash('md5');
   const fileHandle = await open(filePath, 'r');
@@ -196,41 +331,6 @@ async function calculateFileHash(filePath: string, maxChunkSize = 1024 * 1024 * 
   return hash.digest('hex');
 }
 
-async function calculateFileHashes(filePath: string, resolution: number): Promise<{ hash: string, perceptualHash?: string }> {
-  // Use partial hash for large files
-  const hash = await calculateFileHash(filePath);
-
-  let perceptualHash;
-  if (isImageFile(filePath)) {
-    try {
-      perceptualHash = await calculatePerceptualHash(filePath, resolution);
-    } catch (error) {
-      console.warn(`Warning: Could not process ${filePath} with perceptual hashing.`);
-    }
-  }
-
-  return { hash, perceptualHash };
-}
-
-
-async function convertHeicToJpeg(inputPath: string): Promise<Buffer> {
-  const inputBuffer = await readFile(inputPath);
-  
-  // Convert Buffer to ArrayBuffer
-  const arrayBuffer = inputBuffer.buffer.slice(
-    inputBuffer.byteOffset,
-    inputBuffer.byteOffset + inputBuffer.byteLength
-  );
-
-  const convertedBuffer = await heicConvert({
-    buffer: arrayBuffer, // Pass the ArrayBuffer here
-    format: 'JPEG',
-    quality: 1
-  });
-  
-  return Buffer.from(convertedBuffer); // Convert the ArrayBuffer back to Buffer if needed
-}
-
 async function calculatePerceptualHash(filePath: string, resolution: number): Promise<string> {
   let inputBuffer: Buffer;
   
@@ -256,6 +356,17 @@ async function calculatePerceptualHash(filePath: string, resolution: number): Pr
   }
 
   return hash;
+}
+
+async function convertHeicToJpeg(inputPath: string): Promise<Buffer> {
+  const inputBuffer = await readFile(inputPath);
+  const arrayBuffer = inputBuffer.buffer.slice(inputBuffer.byteOffset, inputBuffer.byteOffset + inputBuffer.byteLength);
+  const convertedBuffer = await heicConvert({
+    buffer: arrayBuffer,
+    format: 'JPEG',
+    quality: 1
+  });
+  return Buffer.from(convertedBuffer);
 }
 
 function isImageFile(filePath: string): boolean {
@@ -297,88 +408,44 @@ async function getImageQuality(filePath: string): Promise<number> {
 }
 
 async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
-  const [fileStat, hashes, metadata] = await Promise.all([
+  const [fileStat, hash, metadata] = await Promise.all([
     stat(filePath),
-    calculateFileHashes(filePath, resolution),
+    calculateFileHash(filePath),
     getMetadata(filePath)
   ]);
-
-  const { hash, perceptualHash } = hashes;
 
   const fileInfo: FileInfo = {
     path: filePath,
     size: fileStat.size,
     hash,
-    perceptualHash,
     metadata
   };
 
   if (isImageFile(filePath)) {
+    fileInfo.perceptualHash = await calculatePerceptualHash(filePath, resolution);
     fileInfo.quality = await getImageQuality(filePath);
   }
 
   return fileInfo;
 }
 
-async function scanTargetFolder(targetDir: string, resolution: number): Promise<[Map<string, FileInfo>, ThreadSafeLSH]> {
-  const processedFiles = new Map<string, FileInfo>();
-  const lsh = new ThreadSafeLSH();
+function generateTargetPath(format: string, targetDir: string, date: Date, fileName: string): string {
+  const yearFull = date.getFullYear().toString();
+  const yearShort = yearFull.slice(-2);
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
 
-  async function scanDirectory(dir: string) {
-    const files = await readdir(dir);
-    for (const file of files) {
-      const filePath = join(dir, file);
-      const fileStat = await stat(filePath);
-      if (fileStat.isDirectory()) {
-        await scanDirectory(filePath);
-      } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(file).slice(1).toLowerCase())) {
-        const fileInfo = await getFileInfo(filePath, resolution);
-        processedFiles.set(fileInfo.hash, fileInfo);
-        if (isImageFile(filePath)) {
-          await lsh.add(fileInfo.hash, fileInfo.hash);
-        }
-      }
-    }
-  }
-
-  await scanDirectory(targetDir);
-  return [processedFiles, lsh];
-}
-
-async function* getMediaFiles(dirPath: string): AsyncGenerator<string> {
-  const files = await readdir(dirPath);
-  for (const file of files) {
-    const filePath = join(dirPath, file);
-    const fileStat = await stat(filePath);
-    if (fileStat.isDirectory()) {
-      yield* getMediaFiles(filePath);
-    } else if (ALL_SUPPORTED_EXTENSIONS.includes(extname(file).slice(1).toLowerCase())) {
-      yield filePath;
-    }
-  }
-}
-
-function selectBestFile(files: FileInfo[]): FileInfo {
-  return files.reduce((best, current) => {
-    // Prioritize files with geolocation data
-    if (current.metadata.GPSLatitude && !best.metadata.GPSLatitude) return current;
-    if (best.metadata.GPSLatitude && !current.metadata.GPSLatitude) return best;
-
-    // Prioritize files with more metadata
-    const currentMetadataCount = Object.keys(current.metadata).length;
-    const bestMetadataCount = Object.keys(best.metadata).length;
-    if (currentMetadataCount > bestMetadataCount) return current;
-    if (bestMetadataCount > currentMetadataCount) return best;
-
-    // For images, prioritize higher quality
-    if (current.quality && best.quality) {
-      if (current.quality > best.quality) return current;
-      if (best.quality > current.quality) return best;
-    }
-
-    // If all else is equal, choose the larger file
-    return current.size > best.size ? current : best;
+  const formatParts = format.split('/');
+  const processedParts = formatParts.map(part => {
+    return part
+      .replace('YYYY', yearFull)
+      .replace('YY', yearShort)
+      .replace('MM', month)
+      .replace('DD', day);
   });
+
+  const path = join(targetDir, ...processedParts);
+  return join(path, fileName);
 }
 
 async function transferFile(source: string, target: string, shouldMove: boolean): Promise<void> {
@@ -401,164 +468,6 @@ async function transferFile(source: string, target: string, shouldMove: boolean)
   }
 }
 
-async function processMediaFile(
-  mediaFile: string, 
-  targetDir: string, 
-  errorDir: string | undefined, 
-  duplicateDir: string | undefined, 
-  shouldMove: boolean,
-  processedFiles: Map<string, FileInfo>,
-  lsh: ThreadSafeLSH,
-  mutex: Mutex,
-  resolution: number,
-  hammingThreshold: number,
-  format: string
-): Promise<void> {
-  let fileInfo: FileInfo;
-  try {
-    fileInfo = await getFileInfo(mediaFile, resolution);
-  } catch (error) {
-    stats.errors++;
-    logMessage(chalk.red(`Error processing ${mediaFile}: ${error}`));
-    if (errorDir) {
-      const errorPath = join(errorDir, basename(mediaFile));
-      try {
-        await transferFile(mediaFile, errorPath, shouldMove);
-        logMessage(chalk.yellow(`Moved to error directory: ${errorPath}`));
-      } catch (transferError) {
-        logMessage(chalk.red(`Failed to move to error directory: ${transferError}`));
-      }
-    }
-    return;
-  }
-
-  const release = await mutex.acquire();
-  try {
-    if (processedFiles.has(fileInfo.hash)) {
-      stats.duplicates++;
-      if (duplicateDir) {
-        const duplicateTargetPath = join(duplicateDir, basename(mediaFile));
-        await transferFile(mediaFile, duplicateTargetPath, shouldMove);
-        logMessage(chalk.yellow(`Duplicate found: ${mediaFile} -> ${duplicateTargetPath}`));
-      } else {
-        logMessage(chalk.yellow(`Duplicate found: ${mediaFile} (skipped)`));
-      }
-      return;
-    }
-
-    if (fileInfo.perceptualHash && isImageFile(mediaFile)) {
-      const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
-      for (const candidateHash of candidates) {
-        const simpleHash = perceptualHashMap.get(candidateHash);
-        if (!simpleHash) {
-          logMessage(chalk.red(`Internal error: Missing simpleHash for perceptualHash ${candidateHash}`));
-          throw new Error(`Missing simpleHash for perceptualHash ${candidateHash}`);
-        }
-    
-        const existingFile = processedFiles.get(simpleHash);
-        if (!existingFile) {
-          logMessage(chalk.red(`Internal error: Missing FileInfo for simpleHash ${simpleHash}`));
-          throw new Error(`Missing FileInfo for simpleHash ${simpleHash}`);
-        }
-
-        if (existingFile.perceptualHash && hammingDistance(fileInfo.perceptualHash, existingFile.perceptualHash, hammingThreshold)) {
-          const bestFile = selectBestFile([existingFile, fileInfo]);
-          if (bestFile.path === mediaFile) {
-            // Handle the best file scenario
-            stats.replaced++;
-            await unlink(existingFile.path);
-
-            // Remove the hash from LSH
-            await lsh.remove(existingFile.perceptualHash, existingFile.perceptualHash);
-
-            logMessage(chalk.yellow(`Similar file replaced: ${existingFile.path} -> ${mediaFile}`));
-          } else {
-            stats.duplicates++;
-            if (duplicateDir) {
-              const duplicateTargetPath = join(duplicateDir, basename(mediaFile));
-              await transferFile(mediaFile, duplicateTargetPath, shouldMove);
-              logMessage(chalk.yellow(`Similar file moved: ${mediaFile} -> ${duplicateTargetPath}`));
-            } else {
-              logMessage(chalk.yellow(`Similar file found: ${mediaFile} (skipped), bestFile.path = ${bestFile.path}`));
-            }
-            return;
-          }
-        }
-      }
-    }
-
-    const date = fileInfo.metadata.DateTimeOriginal ? new Date(fileInfo.metadata.DateTimeOriginal) :
-                 fileInfo.metadata.CreateDate ? new Date(fileInfo.metadata.CreateDate) :
-                 new Date();
-
-    // Generate target path using the format provided
-    let targetPath = await findUniquePath(generateTargetPath(format, targetDir, date, basename(mediaFile)));
-
-    await transferFile(mediaFile, targetPath, shouldMove);
-    
-    logMessage(chalk.green(`Successfully ${shouldMove ? 'moved' : 'copied'} ${mediaFile} to ${targetPath}`));
-    
-    processedFiles.set(fileInfo.hash, { ...fileInfo, path: targetPath });
-    if (fileInfo.perceptualHash && isImageFile(mediaFile)) {
-      await lsh.add(fileInfo.perceptualHash, fileInfo.perceptualHash);
-      perceptualHashMap.set(fileInfo.perceptualHash, fileInfo.hash);
-    }
-
-    stats.processed++;
-  } catch (error) {
-    stats.errors++;
-    logMessage(chalk.red(`Error processing ${mediaFile}: ${error}`));
-  } finally {
-    release();
-  }
-
-  progressBar.increment({
-    duplicates: stats.duplicates,
-    errors: stats.errors,
-    replaced: stats.replaced
-  });
-}
-
-function generateTargetPath(format: string, targetDir: string, date: Date, fileName: string): string {
-  const yearFull = date.getFullYear().toString();
-  const yearShort = yearFull.slice(-2);
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
-
-  // Split the format string into components
-  const formatParts = format.split('/');
-
-  // Replace placeholders in each part
-  const processedParts = formatParts.map(part => {
-    return part
-      .replace('YYYY', yearFull)
-      .replace('YY', yearShort)
-      .replace('MM', month)
-      .replace('DD', day);
-  });
-
-  // Join the processed parts to form the directory structure
-  const path = join(targetDir, ...processedParts);
-
-  // Return the final path including the file name
-  return join(path, fileName);
-}
-
-async function findUniquePath(basePath: string): Promise<string> {
-  let targetPath = basePath;
-  let counter = 1;
-  const { name, ext, dir } = parse(basePath);
-  while (true) {
-    try {
-      await stat(targetPath);
-      targetPath = join(dir, `${name}_${counter}${ext}`);
-      counter++;
-    } catch {
-      return targetPath;
-    }
-  }
-}
-
 async function main() {
   const program = new Command();
 
@@ -572,7 +481,7 @@ async function main() {
     .option('-d, --duplicate <path>', 'Directory for duplicate files')
     .option('-w, --workers <number>', 'Number of concurrent workers', '5')
     .option('-m, --move', 'Move files instead of copying them', false)
-    .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '64')
+    .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 8)', '8')
     .option('-h, --hamming <number>', 'Hamming distance threshold (default: 10)', '10')
     .option('-f, --format <string>', 'Format for target directory (default: YYYY/MM)', 'YYYY/MM')
     .parse(process.argv);
@@ -594,51 +503,25 @@ async function main() {
     throw new Error('Hamming threshold must be a non-negative number');
   }
 
-  console.log(chalk.blue('Scanning target folder for existing files...'));
-  const [processedFiles, lsh] = await scanTargetFolder(options.target, resolution);
-  console.log(chalk.green(`Found ${processedFiles.size} existing files in the target folder.`));
+  // Stage 1: File Discovery
+  console.log(chalk.blue('Stage 1: Discovering files...'));
+  const discoveredFiles = await discoverFiles(options.source);
 
-  const promises: Promise<void>[] = [];
-  const semaphore = new Semaphore(parseInt(options.workers, 10));
-  const mutex = new Mutex();
+  // Stage 2: Deduplication
+  console.log(chalk.blue('\nStage 2: Deduplicating files...'));
+  const lsh = new ThreadSafeLSH();
+  const existingFiles = new Map<string, FileInfo>(); // In a real scenario, you might want to populate this with files from the target directory
+  const { uniqueFiles, duplicates, similarFiles } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold, existingFiles, lsh);
 
-  let totalFiles = 0;
-  // for (const dirPath of options.source) {
-  //   for await (const mediaFile of getMediaFiles(dirPath)) {
-  //     totalFiles++;
-  //   }
-  // }
-
-  progressBar.start(totalFiles, 0, {
-    duplicates: 0,
-    errors: 0,
-    replaced: 0
-  });
-
-  for (const dirPath of options.source) {
-    for await (const mediaFile of getMediaFiles(dirPath)) {
-      const [, release] = await semaphore.acquire();
-      const promise = processMediaFile(mediaFile, options.target, options.error, options.duplicate, options.move, processedFiles, lsh, mutex, resolution, hammingThreshold, options.format)
-        .then(() => {
-          release();
-        })
-        .catch((error) => {
-          logMessage(chalk.red(`Unexpected error processing ${mediaFile}: ${error}`));
-          stats.errors++;
-          release();
-        });
-      promises.push(promise);
-    }
-  }
-
-  await Promise.all(promises);
-  progressBar.stop();
+  // Stage 3: File Transfer
+  console.log(chalk.blue('\nStage 3: Transferring files...'));
+  await transferFiles(uniqueFiles, duplicates, similarFiles, options.target, options.duplicate, options.format, options.move);
 
   console.log(chalk.green('\nMedia organization completed'));
-  console.log(chalk.cyan(`Total files processed: ${stats.processed}`));
-  console.log(chalk.yellow(`Duplicates found: ${stats.duplicates}`));
-  console.log(chalk.green(`Files replaced: ${stats.replaced}`));
-  console.log(chalk.red(`Errors encountered: ${stats.errors}`));
+  console.log(chalk.cyan(`Total files discovered: ${discoveredFiles.length}`));
+  console.log(chalk.cyan(`Unique files: ${uniqueFiles.size}`));
+  console.log(chalk.yellow(`Exact duplicates: ${duplicates.size}`));
+  console.log(chalk.yellow(`Similar files: ${similarFiles.size}`));
 
   await exiftool.end();
 }
