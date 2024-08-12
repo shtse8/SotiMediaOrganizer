@@ -1,5 +1,6 @@
 import { readdir, stat, mkdir, rename, copyFile, unlink, readFile, open } from 'fs/promises';
 import { join, parse, basename, dirname, extname, relative } from 'path';
+import { promisify } from 'util';
 import { Semaphore, Mutex } from 'async-mutex';
 import { ExifTool } from 'exiftool-vendored';
 import { Command } from 'commander';
@@ -9,6 +10,7 @@ import cliProgress from 'cli-progress';
 import chalk from 'chalk';
 import heicConvert from 'heic-convert';
 import { Buffer } from 'buffer';
+import { exec } from 'child_process';
 
 // Initialize ExifTool
 const exiftool = new ExifTool();
@@ -137,54 +139,64 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-async function discoverFiles(sourceDirs: string[], concurrency: number = 20, logInterval: number = 1000): Promise<string[]> {
+const execPromise = promisify(exec);
+
+async function discoverFilesUsingFd(sourceDirs: string[]): Promise<string[]> {
+  const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `.${ext}`).join('|');
+  const fdCommand = `fd --type f --extension ${extensionPattern} ${sourceDirs.join(' ')}`;
+
+  try {
+    const { stdout } = await execPromise(fdCommand);
+    return stdout.split('\n').filter(Boolean);
+  } catch (error) {
+    // console.error(chalk.red('Error during file discovery using fd:'), error);
+    throw error;
+  }
+}
+
+async function discoverFilesWithNode(sourceDirs: string[], concurrency: number = 20): Promise<string[]> {
   const allFiles: string[] = [];
-  let dirCount = 0;
-  let fileCount = 0;
-  let lastLogFileCount = 0;
-  const startTime = Date.now();
-  const semaphore = new Semaphore(concurrency);
   const supportedExtensionsSet = new Set(ALL_SUPPORTED_EXTENSIONS);
 
   const scanDirectory = async (dirPath: string): Promise<void> => {
-    const [_, release] = await semaphore.acquire();
-    try {
-      dirCount++;
-      const entries = await readdir(dirPath, { withFileTypes: true });
+    const entries = await readdir(dirPath, { withFileTypes: true });
 
-      await Promise.all(entries.map(async entry => {
-        const entryPath = join(dirPath, entry.name);
-        if (entry.isDirectory()) {
-          await scanDirectory(entryPath);
-        } else {
-          const fileExt = extname(entry.name).slice(1).toLowerCase();
-          if (supportedExtensionsSet.has(fileExt)) {
-            allFiles.push(entryPath);
-            fileCount++;
-
-            // Log progress after every logInterval files
-            if (fileCount - lastLogFileCount >= logInterval) {
-              lastLogFileCount = fileCount;
-              console.log(chalk.blue(`Processed ${dirCount} directories, found ${fileCount} files...`));
-            }
-          }
+    await Promise.all(entries.map(async entry => {
+      const entryPath = join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        await scanDirectory(entryPath);
+      } else {
+        const fileExt = extname(entry.name).slice(1).toLowerCase();
+        if (supportedExtensionsSet.has(fileExt)) {
+          allFiles.push(entryPath);
         }
-      }));
-    } finally {
-      release();
-    }
+      }
+    }));
   };
 
   await Promise.all(sourceDirs.map(dirPath => scanDirectory(dirPath)));
 
-  const duration = (Date.now() - startTime) / 1000;
-  console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
-  console.log(chalk.cyan(`- Scanned ${dirCount} directories`));
-  console.log(chalk.cyan(`- Found ${fileCount} files`));
-
   return allFiles;
 }
 
+async function discoverFiles(sourceDirs: string[], concurrency: number = 20): Promise<string[]> {
+  const startTime = Date.now();
+  let allFiles: string[] = [];
+
+  try {
+    console.log(chalk.blue('Attempting to use fd for file discovery...'));
+    allFiles = await discoverFilesUsingFd(sourceDirs);
+  } catch {
+    console.log(chalk.blue('fd not available or failed, falling back to Node.js implementation...'));
+    allFiles = await discoverFilesWithNode(sourceDirs, concurrency);
+  }
+
+  const duration = (Date.now() - startTime) / 1000;
+  console.log(chalk.green(`\nDiscovery completed in ${duration.toFixed(2)} seconds:`));
+  console.log(chalk.cyan(`- Found ${allFiles.length} files`));
+
+  return allFiles;
+}
 
 // Stage 2: Deduplication
 async function deduplicateFiles(
