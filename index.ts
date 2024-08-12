@@ -167,23 +167,35 @@ async function deduplicateFiles(
   lsh: LSH,
   concurrency: number = 3
 ): Promise<{
-  uniqueFiles: Map<string, FileInfo>,
   duplicates: Map<string, string>,
-  formatCounts: Map<string, number>,
+  formatStats: Map<string, {
+    count: number;
+    duplicates: number;
+    errors: number;
+  }>,
   errorCount: number
 }> {
   const duplicates = new Map<string, string>();
   const perceptualHashMap = new Map<string, string>();
-  const formatCounts = new Map<string, number>();
+  const formatStats = new Map<string, {
+    count: number;
+    duplicates: number;
+    errors: number;
+  }>();
   let errorCount = 0;
   let processedCount = 0;
 
   // Count the number of files for each format
-  const formatFileCounts = files.reduce((acc, file) => {
+  for (const file of files) {
     const ext = extname(file).slice(1).toLowerCase();
-    acc[ext] = (acc[ext] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+    
+    if (!formatStats.has(ext)) {
+      formatStats.set(ext, { count: 1, duplicates: 0, errors: 0 });
+    } else {
+      const stats = formatStats.get(ext)!;
+      stats.count++;
+    }
+  }
 
   // Initialize MultiBar
   const multibar = new cliProgress.MultiBar({
@@ -195,8 +207,8 @@ async function deduplicateFiles(
   // Initialize individual progress bars for each format
   const formatBars: Map<string, cliProgress.SingleBar> = new Map();
 
-  for (const [ext, count] of Object.entries(formatFileCounts)) {
-    formatBars.set(ext, multibar.create(count, 0, { format: ext.padEnd(7, ' '), duplicates: 0, errors: 0 }, {
+  for (const [ext, stats] of Object.entries(formatStats)) {
+    formatBars.set(ext, multibar.create(stats.count, 0, { format: ext.padEnd(7, ' '), duplicates: 0, errors: 0 }, {
       format: colors.grey('{format} {bar} {percentage}% | {value}/{total} | Dup: {duplicates} | Err: {errors} | ETA: {eta_formatted}'),
      }));
   }
@@ -230,14 +242,18 @@ async function deduplicateFiles(
     }
     await addUniqueFile(newFile);
     duplicates.set(existingFile.path, newFile.path);
+    
+    const ext = extname(existingFile.path).slice(1).toLowerCase();
+    const stats = formatStats.get(ext)!;
+    stats.duplicates++;
   }
 
   async function processFile(filePath: string) {
     const ext = extname(filePath).slice(1).toLowerCase();
     const formatBar = formatBars.get(ext);
-
+    const stats = formatStats.get(ext)!;
     try {
-      formatCounts.set(ext, (formatCounts.get(ext) || 0) + 1);
+      stats.count++;
 
       const fileInfo = await getFileInfo(filePath, resolution);
 
@@ -257,10 +273,11 @@ async function deduplicateFiles(
             duplicates.set(filePath, existingFile.path);
           }
           isDuplicate = true;
+          stats.duplicates++;
         } 
         // Check for perceptually similar images
         else if (fileInfo.perceptualHash && isImageFile(filePath)) {
-          const candidates = await lsh.getCandidates(fileInfo.perceptualHash);
+          const candidates = lsh.getCandidates(fileInfo.perceptualHash);
           for (const candidateHash of candidates) {
             const simpleHash = perceptualHashMap.get(candidateHash);
             if (simpleHash) {
@@ -272,6 +289,7 @@ async function deduplicateFiles(
                   await replaceExistingFile(fileInfo, existingFile);
                 } else {
                   duplicates.set(filePath, existingFile.path);
+                  stats.duplicates++;
                 }
                 isDuplicate = true;
                 break;
@@ -287,12 +305,12 @@ async function deduplicateFiles(
         release();
       }
 
-      formatBar?.increment({ duplicates: duplicates.size });
+      formatBar?.increment({ duplicates: stats.duplicates });
       processedCount++;
       overallBar.update(processedCount, { duplicates: duplicates.size, errors: errorCount });
     } catch (error) {
       errorCount++;
-      formatBar?.increment({ errors: errorCount });
+      formatBar?.increment({ errors: stats.errors });
       processedCount++;
       overallBar.update(processedCount, { duplicates: duplicates.size, errors: errorCount });
     }
@@ -312,11 +330,10 @@ async function deduplicateFiles(
   multibar.stop();
 
   console.log(chalk.green(`\nDeduplication completed:`));
-  console.log(chalk.blue(`- ${uniqueFiles.size} unique files`));
   console.log(chalk.yellow(`- ${duplicates.size} duplicates`));
   console.log(chalk.red(`- ${errorCount} errors encountered`));
 
-  return { uniqueFiles, duplicates, formatCounts, errorCount };
+  return { duplicates, formatStats, errorCount };
 }
 
 function selectBestFile(files: FileInfo[]): FileInfo {
@@ -585,15 +602,15 @@ async function main() {
   console.log(chalk.blue('\nStage 2: Deduplicating files...'));
   const lsh = new LSH();
   const existingFiles = new Map<string, FileInfo>(); // In a real scenario, you might want to populate this with files from the target directory
-  const { uniqueFiles, duplicates } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold, existingFiles, lsh);
+  const { duplicates } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold, existingFiles, lsh);
 
   // Stage 3: File Transfer
   console.log(chalk.blue('\nStage 3: Transferring files...'));
-  await transferFiles(uniqueFiles, duplicates, options.target, options.duplicate, options.format, options.move);
+  await transferFiles(existingFiles, duplicates, options.target, options.duplicate, options.format, options.move);
 
   console.log(chalk.green('\nMedia organization completed'));
   console.log(chalk.cyan(`Total files discovered: ${discoveredFiles.length}`));
-  console.log(chalk.cyan(`Unique files: ${uniqueFiles.size}`));
+  console.log(chalk.cyan(`Existing files: ${existingFiles.size}`));
   console.log(chalk.yellow(`Exact duplicates: ${duplicates.size}`));
 
   await exiftool.end();
