@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import heicConvert from 'heic-convert';
 import { Buffer } from 'buffer';
 import { promisify } from 'util';
-import { exec } from 'child_process';
+import { exec, spawn  } from 'child_process';
 
 // Initialize ExifTool
 const exiftool = new ExifTool();
@@ -139,50 +139,76 @@ class ThreadSafeLSH {
 
 
 // Stage 1: File Discovery
-
 const execAsync = promisify(exec);
 
 async function getNativeFileList(sourceDirs: string[]): Promise<string[]> {
   const isWindows = process.platform === 'win32';
   let allFiles: string[] = [];
 
+  const execCommandWithStream = (command: string, args: string[]): Promise<string[]> => {
+      return new Promise((resolve, reject) => {
+          const child = spawn(command, args, { shell: true });
+          let stdoutData = '';
+
+          child.stdout.on('data', (data) => {
+              stdoutData += data.toString();
+          });
+
+          child.stderr.on('data', (data) => {
+              process.stderr.write(`stderr: ${data}`);
+          });
+
+          child.on('close', (code) => {
+              if (code === 0) {
+                  resolve(stdoutData.split('\n').filter(line => line.trim() !== ''));
+              } else {
+                  reject(new Error(`Command exited with code ${code}`));
+              }
+          });
+
+          child.on('error', (error) => {
+              reject(error);
+          });
+      });
+  };
+
   if (isWindows) {
-    // Handle Windows-specific command using forfiles with chunked patterns
-    const maxPatternLength = 253; // Max characters for the /m option
-    const extensionChunks: string[][] = [];
-    let currentChunk: string[] = [];
+      // Handle Windows-specific command using forfiles with chunked patterns
+      const maxPatternLength = 253; // Max characters for the /m option
+      const extensionChunks: string[][] = [];
+      let currentChunk: string[] = [];
 
-    // Break extensions into chunks
-    let currentLength = 0;
-    for (const ext of ALL_SUPPORTED_EXTENSIONS) {
-      const extPattern = `*.${ext}`;
-      if (currentLength + extPattern.length + 1 > maxPatternLength) {
-        extensionChunks.push(currentChunk);
-        currentChunk = [];
-        currentLength = 0;
+      // Break extensions into chunks
+      let currentLength = 0;
+      for (const ext of ALL_SUPPORTED_EXTENSIONS) {
+          const extPattern = `*.${ext}`;
+          if (currentLength + extPattern.length + 1 > maxPatternLength) {
+              extensionChunks.push(currentChunk);
+              currentChunk = [];
+              currentLength = 0;
+          }
+          currentChunk.push(extPattern);
+          currentLength += extPattern.length + 1;
       }
-      currentChunk.push(extPattern);
-      currentLength += extPattern.length + 1;
-    }
-    if (currentChunk.length > 0) {
-      extensionChunks.push(currentChunk);
-    }
+      if (currentChunk.length > 0) {
+          extensionChunks.push(currentChunk);
+      }
 
-    const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
+      const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
 
-    for (const chunk of extensionChunks) {
-      const pattern = chunk.join(' ');
-      const command = `forfiles /s /p ${dirList} /m "${pattern}" /c "cmd /c echo @path"`;
-      const { stdout } = await execAsync(command);
-      allFiles.push(...stdout.split('\n').filter(line => line.trim() !== ''));
-    }
+      for (const chunk of extensionChunks) {
+          const pattern = chunk.join(' ');
+          const command = `forfiles /s /p ${dirList} /m "${pattern}" /c "cmd /c echo @path"`;
+          const files = await execCommandWithStream(command, []);
+          allFiles.push(...files);
+      }
   } else {
-    // Handle Unix-like command using find
-    const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `-name "*.${ext}"`).join(' -o ');
-    const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
-    const command = `find ${dirList} -type f \\( ${extensionPattern} \\)`;
-    const { stdout } = await execAsync(command);
-    allFiles.push(...stdout.split('\n').filter(line => line.trim() !== ''));
+      // Handle Unix-like command using find
+      const extensionPattern = ALL_SUPPORTED_EXTENSIONS.map(ext => `-name "*.${ext}"`).join(' -o ');
+      const dirList = sourceDirs.map(dir => `"${dir}"`).join(' ');
+      const command = `find ${dirList} -type f \\( ${extensionPattern} \\)`;
+      const files = await execCommandWithStream(command, []);
+      allFiles.push(...files);
   }
 
   return allFiles;
