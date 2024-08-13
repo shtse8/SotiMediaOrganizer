@@ -1,7 +1,7 @@
 import { readdir, stat, mkdir, rename, copyFile, unlink, readFile, open } from 'fs/promises';
 import { join, parse, basename, dirname, extname, relative } from 'path';
 import { Semaphore, Mutex } from 'async-mutex';
-import { ExifDateTime, ExifTool, type Tags } from 'exiftool-vendored';
+import { ExifDate, ExifDateTime, ExifTool, type Tags } from 'exiftool-vendored';
 import { Command } from 'commander';
 import sharp from 'sharp';
 import crypto, { createHash } from 'crypto';
@@ -626,14 +626,16 @@ const exiftool = new ExifTool({
 
 
 function getMetadata(path: string): Promise<Tags> {
-    const tagsToExtract = [
-      'DateTimeOriginal',
-      'CreateDate',
-      'Model',
-      'GPSLatitude',
-      'GPSLongitude'
-    ];
-   return  exiftool.read<Tags>(path, ['-fast', '-n', ...tagsToExtract.map(tag => `-${tag}`)]);
+  const tagsToExtract = [
+    'DateTimeOriginal',
+    'CreateDate',
+    'DateCreated',
+    'DigitalCreationDate',
+    'Model',
+    'GPSLatitude',
+    'GPSLongitude'
+  ];
+ return  exiftool.read<Tags>(path, ['-fast', '-n', ...tagsToExtract.map(tag => `-${tag}`)]);
 }
 
 async function processImageFile(filePath: string, resolution: number): Promise<{
@@ -672,20 +674,13 @@ async function processImageFile(filePath: string, resolution: number): Promise<{
   }
 }
 
-function toDate(value: string | ExifDateTime | undefined): Date | undefined {
+function toDate(value: string | ExifDateTime | ExifDate | undefined): Date | undefined {
   if (!value) return undefined;
   if (typeof value === 'string') return new Date(value);
   if (value instanceof ExifDateTime) {
-    // ExifDateTime has year, month, day, hour, minute, second, millisecond properties
-    return new Date(
-      value.year,
-      value.month - 1, // JavaScript months are 0-indexed
-      value.day,
-      value.hour,
-      value.minute,
-      value.second,
-      value.millisecond
-    );
+    return value.toDate();
+  } else if (value instanceof ExifDate) {
+    return value.toDate();
   }
   return undefined;
 }
@@ -700,11 +695,13 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
       : Promise.resolve({ perceptualHash: undefined, quality: undefined })
   ]);
 
+  const imageDate = toDate(metadata.DateTimeOriginal);
+
   const fileInfo: FileInfo = {
     path: filePath,
     size: fileStat.size,
     hash,
-    imageDate: toDate(metadata.CreateDate),
+    imageDate:imageDate,
     fileDate: fileStat.mtime,  // Added
     perceptualHash: imageInfo.perceptualHash,
     quality: imageInfo.quality,
