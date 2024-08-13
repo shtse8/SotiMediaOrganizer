@@ -714,41 +714,50 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
 
   return fileInfo;
 }
-function getWeek(date: Date | undefined): string {
-  if (!date) return '';
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1)/7).toString().padStart(2, '0');
-}
 
 function formatDate(date: Date | undefined, format: string): string {
   if (!date || isNaN(date.getTime())) {
     return 'InvalidDate';
   }
   
-  const options: Intl.DateTimeFormatOptions = {
-    year: format.includes('YYYY') ? 'numeric' : format.includes('YY') ? '2-digit' : undefined,
-    month: format.includes('MMMM') ? 'long' : format.includes('MMM') ? 'short' : format.includes('MM') ? '2-digit' : 'numeric',
-    day: format.includes('DD') ? '2-digit' : 'numeric',
-    hour: format.includes('hh') ? '2-digit' : 'numeric',
-    minute: format.includes('mm') ? '2-digit' : 'numeric',
-    second: format.includes('ss') ? '2-digit' : 'numeric',
-    hour12: format.includes('a') || format.includes('A'),
-    weekday: format.includes('DDDD') ? 'long' : format.includes('DDD') ? 'short' : undefined,
+  const pad = (num: number) => num.toString().padStart(2, '0');
+  
+  const formatters: { [key: string]: () => string } = {
+    'YYYY': () => date.getFullYear().toString(),
+    'YY': () => date.getFullYear().toString().slice(-2),
+    'MMMM': () => date.toLocaleString('default', { month: 'long' }),
+    'MMM': () => date.toLocaleString('default', { month: 'short' }),
+    'MM': () => pad(date.getMonth() + 1),
+    'M': () => (date.getMonth() + 1).toString(),
+    'DD': () => pad(date.getDate()),
+    'D': () => date.getDate().toString(),
+    'DDDD': () => date.toLocaleString('default', { weekday: 'long' }),
+    'DDD': () => date.toLocaleString('default', { weekday: 'short' }),
+    'HH': () => pad(date.getHours()),
+    'H': () => date.getHours().toString(),
+    'hh': () => pad(date.getHours() % 12 || 12),
+    'h': () => (date.getHours() % 12 || 12).toString(),
+    'mm': () => pad(date.getMinutes()),
+    'm': () => date.getMinutes().toString(),
+    'ss': () => pad(date.getSeconds()),
+    's': () => date.getSeconds().toString(),
+    'a': () => date.getHours() < 12 ? 'am' : 'pm',
+    'A': () => date.getHours() < 12 ? 'AM' : 'PM',
+    'WW': () => pad(getWeekNumber(date)),
   };
 
-  try {
-    let formatted = new Intl.DateTimeFormat('en-US', options).format(date);
-    if (format.includes('a')) {
-      formatted = formatted.replace(/AM|PM/, (match) => match.toLowerCase());
-    }
-    return formatted.replace(/[^\w]/g, '');
-  } catch (error) {
-    console.error(`Error formatting date: ${error}`);
-    return 'InvalidDate';
-  }
+  return format.replace(/(\w+)/g, (match) => {
+    const formatter = formatters[match];
+    return formatter ? formatter() : match;
+  });
+}
+
+function getWeekNumber(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1)/7);
 }
 
 function generateTargetPath(format: string, targetDir: string, fileInfo: FileInfo): string {
@@ -758,9 +767,8 @@ function generateTargetPath(format: string, targetDir: string, fileInfo: FileInf
   function generateRandomId(): string {
     return crypto.randomBytes(4).toString('hex');
   }
-
+  
   const data: { [key: string]: string } = {
-    // Image date placeholders
     'I.YYYY': formatDate(fileInfo.imageDate, 'YYYY'),
     'I.YY': formatDate(fileInfo.imageDate, 'YY'),
     'I.MMMM': formatDate(fileInfo.imageDate, 'MMMM'),
@@ -781,9 +789,8 @@ function generateTargetPath(format: string, targetDir: string, fileInfo: FileInf
     'I.s': formatDate(fileInfo.imageDate, 's'),
     'I.a': formatDate(fileInfo.imageDate, 'a'),
     'I.A': formatDate(fileInfo.imageDate, 'A'),
-    'I.WW': getWeek(fileInfo.imageDate),
+    'I.WW': formatDate(fileInfo.imageDate, 'WW'),
     
-    // File date placeholders
     'F.YYYY': formatDate(fileInfo.fileDate, 'YYYY'),
     'F.YY': formatDate(fileInfo.fileDate, 'YY'),
     'F.MMMM': formatDate(fileInfo.fileDate, 'MMMM'),
@@ -804,9 +811,8 @@ function generateTargetPath(format: string, targetDir: string, fileInfo: FileInf
     'F.s': formatDate(fileInfo.fileDate, 's'),
     'F.a': formatDate(fileInfo.fileDate, 'a'),
     'F.A': formatDate(fileInfo.fileDate, 'A'),
-    'F.WW': getWeek(fileInfo.fileDate),
+    'F.WW': formatDate(fileInfo.fileDate, 'WW'),
     
-    // Mixed date placeholders
     'D.YYYY': formatDate(mixedDate, 'YYYY'),
     'D.YY': formatDate(mixedDate, 'YY'),
     'D.MMMM': formatDate(mixedDate, 'MMMM'),
@@ -827,28 +833,23 @@ function generateTargetPath(format: string, targetDir: string, fileInfo: FileInf
     'D.s': formatDate(mixedDate, 's'),
     'D.a': formatDate(mixedDate, 'a'),
     'D.A': formatDate(mixedDate, 'A'),
-    'D.WW': getWeek(mixedDate),
+    'D.WW': formatDate(mixedDate, 'WW'),
     
-    // Other placeholders
+    'NAME': name,
+    'NAME.L': name.toLowerCase(),
+    'NAME.U': name.toUpperCase(),
     'EXT': ext.slice(1).toLowerCase(),
+    'RND': generateRandomId(),
     'GEO': fileInfo.geoLocation || '',
     'CAM': fileInfo.cameraModel || '',
     'TYPE': fileInfo.quality !== undefined ? 'Image' : 'Other',
     'HAS.GEO': fileInfo.geoLocation ? 'GeoTagged' : 'NoGeo',
     'HAS.CAM': fileInfo.cameraModel ? 'WithCamera' : 'NoCamera',
-    'HAS.DATE': (fileInfo.imageDate && !isNaN(fileInfo.imageDate.getTime())) || 
-                (fileInfo.fileDate && !isNaN(fileInfo.fileDate.getTime())) ? 'Dated' : 'NoDate',
-    
-    // Filename placeholders
-    'NAME': name,
-    'NAME.L': name.toLowerCase(),
-    'NAME.U': name.toUpperCase(),
-    'RND': generateRandomId(),  // New random ID placeholder
+    'HAS.DATE': mixedDate && !isNaN(mixedDate.getTime()) ? 'Dated' : 'NoDate',
   };
 
   let formattedPath = format.replace(/\{([^{}]+)\}/g, (match, key) => {
-    const value = data[key];
-    return value === 'InvalidDate' ? 'NoDate' : (value || match);
+    return data[key] || match;
   });
 
   // Split the path into directory and filename
