@@ -1,3 +1,4 @@
+import ffmpeg from 'fluent-ffmpeg';
 import { readdir, stat, mkdir, rename, copyFile, unlink, readFile, open } from 'fs/promises';
 import { join, parse, basename, dirname, extname, relative } from 'path';
 import { Semaphore, Mutex } from 'async-mutex';
@@ -12,7 +13,6 @@ import ora from 'ora';
 import { createReadStream } from 'fs';
 import os from 'os';
 import { existsSync } from 'fs';
-
 
 
 // Define the supported file extensions
@@ -365,7 +365,6 @@ async function deduplicateFiles(
           }
         }
 
-        const stats = formatStats.get(ext)!;
         if (isDuplicate) {
           let duplicateSet = duplicateSets.get(bestHash);
           if (!duplicateSet) {
@@ -607,6 +606,11 @@ function isImageFile(filePath: string): boolean {
   return SUPPORTED_EXTENSIONS.images.includes(ext) || SUPPORTED_EXTENSIONS.rawImages.includes(ext);
 }
 
+function isVideoFile(filePath: string): boolean {
+  const ext = extname(filePath).slice(1).toLowerCase();
+  return SUPPORTED_EXTENSIONS.videos.includes(ext);
+}
+
 function hammingDistance(str1: string, str2: string): number {
   if (str1.length !== str2.length) {
     throw new Error('Strings must be of equal length');
@@ -633,46 +637,88 @@ function getMetadata(path: string): Promise<Tags> {
     'DigitalCreationDate',
     'Model',
     'GPSLatitude',
-    'GPSLongitude'
+    'GPSLongitude',
+    'Resolution'
   ];
  return  exiftool.read<Tags>(path, ['-fast', '-n', ...tagsToExtract.map(tag => `-${tag}`)]);
 }
 
-async function processImageFile(filePath: string, resolution: number): Promise<{
-  perceptualHash: string;
-  quality: number;
-}> {
+async function getImagePerceptualHash(filePath: string, resolution: number): Promise<string> {
   const image = sharp(filePath, { failOnError: false });
 
   try {
-    const [perceptualHashData, metadata] = await Promise.all([
-      image
+    const perceptualHashData = await image
         .jpeg()
         .resize(resolution, resolution, { fit: 'fill' })
         .greyscale()
         .raw()
-        .toBuffer({ resolveWithObject: true }),
-      image.metadata()
-    ]);
+        .toBuffer({ resolveWithObject: true });
 
     // Calculate perceptual hash
-    let hash = '';
-    const pixelCount = resolution * resolution;
-    const totalBrightness = perceptualHashData.data.reduce((sum: number, pixel: number) => sum + pixel, 0);
-    const averageBrightness = totalBrightness / pixelCount;
-
-    for (let i = 0; i < pixelCount; i++) {
-      hash += perceptualHashData.data[i] < averageBrightness ? '0' : '1';
-    }
-
-    // Calculate image quality
-    const quality = (metadata.width || 0) * (metadata.height || 0);
-
-    return { perceptualHash: hash, quality };
+    return getPerceptualHash(perceptualHashData.data, resolution);
   } finally {
     image.destroy();
   }
 }
+
+async function getVideoPerceptualHash(filePath: string, numFrames: number = 10, resolution: number = 8): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const frameBuffers: Buffer[] = [];
+
+    ffmpeg(filePath)
+      .on('error', (err) => {
+        // console.error(`Error processing video file ${filePath}:`, err);
+        return reject(err);
+      })
+      .on('end', async () => {
+        try {
+          const combinedHash = await combineFrameHashes(frameBuffers, resolution);
+          resolve(combinedHash);
+        } catch (error) {
+          reject(error);
+        }
+      })
+      .videoFilters(`select='not(mod(n,${Math.floor(numFrames / 5)}))',scale=${resolution}:${resolution},format=gray`)
+      .frames(numFrames)
+      .outputOptions('-vcodec', 'rawvideo', '-f', 'rawvideo', '-pix_fmt', 'gray')
+      .pipe()
+      .on('data', (chunk) => {
+        frameBuffers.push(chunk);
+      });
+  });
+}
+
+async function combineFrameHashes(frameBuffers: Buffer[], resolution: number): Promise<string> {
+  const pixelCount = resolution * resolution;
+  const frameCount = frameBuffers.length;
+  const averageBuffer = Buffer.alloc(pixelCount);
+
+  // Calculate average pixel values across all frames
+  for (let i = 0; i < pixelCount; i++) {
+    let sum = 0;
+    for (const frameBuffer of frameBuffers) {
+      sum += frameBuffer[i];
+    }
+    averageBuffer[i] = Math.round(sum / frameCount);
+  }
+
+  // Calculate perceptual hash from the average frame
+  return getPerceptualHash(averageBuffer, resolution);
+}
+
+function getPerceptualHash(imageBuffer: Buffer, resolution: number): string {
+  const pixelCount = resolution * resolution;
+  const totalBrightness = imageBuffer.reduce((sum, pixel) => sum + pixel, 0);
+  const averageBrightness = totalBrightness / pixelCount;
+
+  let hash = '';
+  for (let i = 0; i < pixelCount; i++) {
+    hash += imageBuffer[i] < averageBrightness ? '0' : '1';
+  }
+
+  return hash;
+}
+
 
 function toDate(value: string | ExifDateTime | ExifDate | undefined): Date | undefined {
   if (!value) return undefined;
@@ -686,16 +732,18 @@ function toDate(value: string | ExifDateTime | ExifDate | undefined): Date | und
 }
 
 async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
-  const [fileStat, hash, metadata, imageInfo] = await Promise.all([
+  const [fileStat, hash, metadata, perceptualHash] = await Promise.all([
     stat(filePath),
     calculateFileHash(filePath),
     getMetadata(filePath),
     isImageFile(filePath) 
-      ? processImageFile(filePath, resolution)
-      : Promise.resolve({ perceptualHash: undefined, quality: undefined })
+      ? getImagePerceptualHash(filePath, resolution)
+      : isVideoFile(filePath)
+      ? getVideoPerceptualHash(filePath, 5, resolution)
+      : Promise.resolve(undefined)
   ]);
 
-  const imageDate = toDate(metadata.DateTimeOriginal);
+  const imageDate = toDate(metadata.DateTimeOriginal) ?? toDate(metadata.MediaCreateDate);
 
   const fileInfo: FileInfo = {
     path: filePath,
@@ -703,8 +751,8 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
     hash,
     imageDate:imageDate,
     fileDate: fileStat.mtime,  // Added
-    perceptualHash: imageInfo.perceptualHash,
-    quality: imageInfo.quality,
+    perceptualHash: perceptualHash,
+    quality: (metadata.ImageHeight ?? 0) * (metadata.ImageWidth ?? 0),
     geoLocation: metadata.GPSLatitude && metadata.GPSLongitude ? `${metadata.GPSLatitude},${metadata.GPSLongitude}` : undefined,
     cameraModel: metadata.Model
   };
@@ -712,6 +760,7 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
   return fileInfo;
 }
 
+console.log(await getFileInfo('/mnt/c/test/NoDate/2024/08/20240813_35d1cfdd.mov' , 64));
 function formatDate(date: Date | undefined, format: string): string {
   if (!date || isNaN(date.getTime())) {
     return '';
