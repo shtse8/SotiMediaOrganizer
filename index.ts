@@ -717,7 +717,7 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
 
 function formatDate(date: Date | undefined, format: string): string {
   if (!date || isNaN(date.getTime())) {
-    return 'InvalidDate';
+    return '';
   }
   
   const pad = (num: number) => num.toString().padStart(2, '0');
@@ -849,8 +849,16 @@ function generateTargetPath(format: string, targetDir: string, fileInfo: FileInf
   };
 
   let formattedPath = format.replace(/\{([^{}]+)\}/g, (match, key) => {
-    return data[key] || match;
+    return data[key] || '';
   });
+
+  // Remove any empty path segments
+  formattedPath = formattedPath.split('/').filter(Boolean).join('/');
+
+  // If the path is empty after removing empty segments, use 'NoDate'
+  if (!formattedPath) {
+    formattedPath = 'NoDate';
+  }
 
   // Split the path into directory and filename
   const parts = formattedPath.split('/');
