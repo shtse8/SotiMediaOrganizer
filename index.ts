@@ -621,28 +621,10 @@ function hammingDistance(str1: string, str2: string): number {
 }
 
 // Create a single instance of ExifTool with optimized options
-const exiftool = new ExifTool({ 
-  useMWG: true,
-  maxProcs: os.cpus().length, // Use all available CPU cores
-  maxTasksPerProcess: 1000, // Increased from default 500
-  taskTimeoutMillis: 5000,
-  minDelayBetweenSpawnMillis: 0, // No delay between spawning processes
-  streamFlushMillis: 100, // Reduced from default; adjust if you see noTaskData events
-});
-
+const exiftool = new ExifTool();
 
 function getMetadata(path: string): Promise<Tags> {
-  const tagsToExtract = [
-    'DateTimeOriginal',
-    'CreateDate',
-    'DateCreated',
-    'DigitalCreationDate',
-    'Model',
-    'GPSLatitude',
-    'GPSLongitude',
-    'Resolution'
-  ];
- return  exiftool.read<Tags>(path, ['-fast', '-n', ...tagsToExtract.map(tag => `-${tag}`)]);
+ return exiftool.read(path);
 }
 
 async function getImagePerceptualHash(filePath: string, resolution: number): Promise<string> {
