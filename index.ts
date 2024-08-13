@@ -689,7 +689,6 @@ async function getVideoPerceptualHash(filePath: string, numFrames: number = 10, 
             if (frameBuffers.length <= 0) {
               return reject(new Error('No frames extracted from video.'));
             }
-            console.log('number of frames:', frameBuffers.length, numFrames);
             const combinedHash = await combineFrameHashes(frameBuffers, resolution);
             resolve(combinedHash);
           } catch (error) {
