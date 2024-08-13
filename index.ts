@@ -842,7 +842,7 @@ function generateTargetPath(format: string, targetDir: string, fileInfo: FileInf
     'TYPE': fileInfo.quality !== undefined ? 'Image' : 'Other',
     'HAS.GEO': fileInfo.geoLocation ? 'GeoTagged' : 'NoGeo',
     'HAS.CAM': fileInfo.cameraModel ? 'WithCamera' : 'NoCamera',
-    'HAS.DATE': mixedDate && !isNaN(mixedDate.getTime()) ? 'Dated' : 'NoDate',
+    'HAS.DATE': fileInfo.imageDate && !isNaN(fileInfo.imageDate.getTime()) ? 'Dated' : 'NoDate',
   };
 
   let formattedPath = format.replace(/\{([^{}]+)\}/g, (match, key) => {
