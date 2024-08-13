@@ -566,7 +566,7 @@ async function transferFiles(
       await transferOrCopyFile(errorFilePath, targetPath, !shouldMove);
       errorBar.increment();
     }
-    console.log(chalk.yellow(`${errorFiles.length} files that couldn't be processed have been ${shouldMove ? 'moved' : 'copied'} to ${errorDir}`));
+    
   }
 
   multibar.stop();
