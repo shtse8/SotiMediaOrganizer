@@ -1,7 +1,7 @@
 import { readdir, stat, mkdir, rename, copyFile, unlink, readFile, open } from 'fs/promises';
 import { join, parse, basename, dirname, extname, relative } from 'path';
 import { Semaphore, Mutex } from 'async-mutex';
-import { ExifTool } from 'exiftool-vendored';
+import { ExifDateTime, ExifTool, type Tags } from 'exiftool-vendored';
 import { Command } from 'commander';
 import sharp from 'sharp';
 import crypto, { createHash } from 'crypto';
@@ -10,9 +10,9 @@ import chalk from 'chalk';
 import { Buffer } from 'buffer';
 import ora from 'ora';
 import { createReadStream } from 'fs';
+import os from 'os';
 
-// Initialize ExifTool
-const exiftool = new ExifTool();
+
 
 // Define the supported file extensions
 const SUPPORTED_EXTENSIONS = {
@@ -30,7 +30,7 @@ interface FileInfo {
   size: number;
   hash: string;
   perceptualHash?: string;
-  imageDate: Date;
+  imageDate?: Date;
   hasGeolocation: boolean;
   hasBasicMetadata: boolean;
   quality?: number;
@@ -156,7 +156,8 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
       for (const entry of entries) {
         const entryPath = join(dirPath, entry.name);
         if (entry.isDirectory()) {
-          semaphore.runExclusive(() => scanDirectory(entryPath));
+          const [_, release] = await semaphore.acquire();
+          scanDirectory(entryPath).finally(() => release());
         } else if (supportedExtensions.has(extname(entry.name).slice(1).toLowerCase())) {
           allFiles.push(entryPath);
           fileCount++;
@@ -169,7 +170,10 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
   }
 
   // Start scanning all source directories
-  sourceDirs.forEach((dirPath) => semaphore.runExclusive(() => scanDirectory(dirPath)));
+  for (const dirPath of sourceDirs) {
+    const [_, release] = await semaphore.acquire();
+    await scanDirectory(dirPath).finally(() => release());
+  }
 
   await semaphore.waitForUnlock(concurrency);
 
@@ -290,18 +294,20 @@ async function deduplicateFiles(
       const newExt = extname(fileInfo.path).slice(1).toLowerCase();
       
       // Decrease stats for old best file
+      const oldStats = formatStats.get(oldExt)!;
       updateFormatStats(oldExt, {
-        picked: formatStats.get(oldExt)!.picked - 1,
-        pickedWithGeo: formatStats.get(oldExt)!.pickedWithGeo - (oldBestFile.hasGeolocation ? 1 : 0),
-        pickedWithMetadata: formatStats.get(oldExt)!.pickedWithMetadata - (oldBestFile.hasBasicMetadata ? 1 : 0),
-        duplicates: formatStats.get(oldExt)!.duplicates + 1
+        picked: oldStats.picked - 1,
+        pickedWithGeo: oldStats.pickedWithGeo - (oldBestFile.hasGeolocation ? 1 : 0),
+        pickedWithMetadata: oldStats.pickedWithMetadata - (oldBestFile.hasBasicMetadata ? 1 : 0),
+        duplicates: oldStats.duplicates + 1
       });
 
       // Increase stats for new best file
+      const newStats = formatStats.get(newExt)!;
       updateFormatStats(newExt, {
-        picked: formatStats.get(newExt)!.picked + 1,
-        pickedWithGeo: formatStats.get(newExt)!.pickedWithGeo + (fileInfo.hasGeolocation ? 1 : 0),
-        pickedWithMetadata: formatStats.get(newExt)!.pickedWithMetadata + (fileInfo.hasBasicMetadata ? 1 : 0)
+        picked: newStats.picked + 1,
+        pickedWithGeo: newStats.pickedWithGeo + (fileInfo.hasGeolocation ? 1 : 0),
+        pickedWithMetadata: newStats.pickedWithMetadata + (fileInfo.hasBasicMetadata ? 1 : 0)
       });
 
       uniqueFiles.delete(oldBestFile.hash);
@@ -418,7 +424,12 @@ async function deduplicateFiles(
   }
 
   // Process all files
-  await Promise.all(files.map(filePath => semaphore.runExclusive(() => processFile(filePath))));
+  for (const file of files) {
+    const [_, release] = await semaphore.acquire();
+    processFile(file).finally(() => release());
+  }
+
+  await semaphore.waitForUnlock(concurrency);
 
   multibar.stop();
 
@@ -608,13 +619,26 @@ function hammingDistance(str1: string, str2: string): number {
   return str1.split('').reduce((count, char, i) => count + (char !== str2[i] ? 1 : 0), 0);
 }
 
-async function getMetadata(path: string): Promise<any> {
-  try {
-    return await exiftool.read(path);
-  } catch (error) {
-    console.error(`Error getting metadata for ${path}: ${error}`);
-    return {};
-  }
+// Create a single instance of ExifTool with optimized options
+const exiftool = new ExifTool({ 
+  useMWG: true,
+  maxProcs: os.cpus().length, // Use all available CPU cores
+  maxTasksPerProcess: 1000, // Increased from default 500
+  taskTimeoutMillis: 5000,
+  minDelayBetweenSpawnMillis: 0, // No delay between spawning processes
+  streamFlushMillis: 100, // Reduced from default; adjust if you see noTaskData events
+});
+
+
+function getMetadata(path: string): Promise<Tags> {
+    const tagsToExtract = [
+      'DateTimeOriginal',
+      'CreateDate',
+      'Model',
+      'GPSLatitude',
+      'GPSLongitude'
+    ];
+   return  exiftool.read<Tags>(path, ['-fast', '-n', ...tagsToExtract.map(tag => `-${tag}`)]);
 }
 
 async function processImageFile(filePath: string, resolution: number): Promise<{
@@ -653,7 +677,26 @@ async function processImageFile(filePath: string, resolution: number): Promise<{
   }
 }
 
+function toDate(value: string | ExifDateTime | undefined): Date | undefined {
+  if (!value) return undefined;
+  if (typeof value === 'string') return new Date(value);
+  if (value instanceof ExifDateTime) {
+    // ExifDateTime has year, month, day, hour, minute, second, millisecond properties
+    return new Date(
+      value.year,
+      value.month - 1, // JavaScript months are 0-indexed
+      value.day,
+      value.hour,
+      value.minute,
+      value.second,
+      value.millisecond
+    );
+  }
+  return undefined;
+}
+
 async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
+  const startTime = Date.now();
   const [fileStat, hash, metadata, imageInfo] = await Promise.all([
     stat(filePath),
     calculateFileHash(filePath),
@@ -662,6 +705,8 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
       ? processImageFile(filePath, resolution)
       : Promise.resolve({ perceptualHash: undefined, quality: undefined })
   ]);
+  const duration = (Date.now() - startTime) / 1000;
+  // console.log(chalk.cyan(`Processed ${filePath} in ${duration.toFixed(2)} seconds`));
 
   const hasBasicMetadata = !!(metadata.DateTimeOriginal || metadata.CreateDate || metadata.Model);
 
@@ -669,9 +714,7 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
     path: filePath,
     size: fileStat.size,
     hash,
-    imageDate: metadata.DateTimeOriginal ? new Date(metadata.DateTimeOriginal) :
-      metadata.CreateDate ? new Date(metadata.CreateDate) :
-      new Date(),
+    imageDate: toDate(metadata.CreateDate),
     hasGeolocation: !!(metadata.GPSLatitude && metadata.GPSLongitude),
     hasBasicMetadata,
     perceptualHash: imageInfo.perceptualHash,
@@ -681,23 +724,27 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
   return fileInfo;
 }
 
-function generateTargetPath(format: string, targetDir: string, date: Date, fileName: string): string {
-  const yearFull = date.getFullYear().toString();
-  const yearShort = yearFull.slice(-2);
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
+function generateTargetPath(format: string, targetDir: string, date: Date | undefined, fileName: string): string {
+  if (!date) {
+    return join(targetDir, 'Unknown Date', fileName);
+  } else {
+    const yearFull = date.getFullYear().toString();
+    const yearShort = yearFull.slice(-2);
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
 
-  const formatParts = format.split('/');
-  const processedParts = formatParts.map(part => {
-    return part
-      .replace('YYYY', yearFull)
-      .replace('YY', yearShort)
-      .replace('MM', month)
-      .replace('DD', day);
-  });
+    const formatParts = format.split('/');
+    const processedParts = formatParts.map(part => {
+      return part
+        .replace('YYYY', yearFull)
+        .replace('YY', yearShort)
+        .replace('MM', month)
+        .replace('DD', day);
+    });
 
-  const path = join(targetDir, ...processedParts);
-  return join(path, fileName);
+    const path = join(targetDir, ...processedParts);
+    return join(path, fileName);
+}
 }
 
 async function transferOrCopyFile(sourcePath: string, targetPath: string, isCopy: boolean): Promise<void> {
