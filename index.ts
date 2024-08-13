@@ -31,9 +31,10 @@ interface FileInfo {
   hash: string;
   perceptualHash?: string;
   imageDate?: Date;
-  hasGeolocation: boolean;
-  hasBasicMetadata: boolean;
+  fileDate: Date;
   quality?: number;
+  geoLocation?: string; 
+  cameraModel?: string;
 }
 
 interface DuplicateSet {
@@ -54,38 +55,23 @@ interface ProgramOptions {
   format: string;
 }
 
-interface FormatStats {
-  count: number;
+interface Stats {
+  totalCount: number;
   processedCount: number;
-  duplicates: number;
-  errors: number;
-  picked: number;
-  pickedWithGeo: number;
-  pickedWithMetadata: number;
-}
-
-interface OverallStats {
-  processedCount: number;
-  pickedFiles: number;
-  pickedWithGeo: number;
-  pickedWithMetadata: number;
-  duplicates: number;
-  errors: number;
+  pickedCount: number;
+  withGeoCount: number;
+  withImageDateCount: number;
+  withCameraCount: number;
+  duplicateCount: number;
+  errorCount: number;
 }
 
 interface DeduplicationResult {
   uniqueFiles: Map<string, FileInfo>;
   duplicateSets: Map<string, DuplicateSet>;
-  formatStats: Map<string, FormatStats>;
+  formatStats: Map<string, Stats>;
+  overallStats: Stats;
   errorFiles: string[];
-  stats: {
-    totalFiles: number;
-    pickedFiles: number;
-    pickedWithGeo: number;
-    pickedWithMetadata: number;
-    duplicateSets: number;
-    totalDuplicates: number;
-  };
 }
 
 class LSH {
@@ -193,15 +179,17 @@ async function deduplicateFiles(
   const uniqueFiles = new Map<string, FileInfo>();
   const duplicateSets = new Map<string, DuplicateSet>();
   const perceptualHashMap = new Map<string, string>();
-  const formatStats = new Map<string, FormatStats>();
+  const formatStats = new Map<string, Stats>();
   const errorFiles: string[] = [];
-  const overallStats: OverallStats = {
+  const overallStats: Stats = {
+    totalCount: files.length,
     processedCount: 0,
-    pickedFiles: 0,
-    pickedWithGeo: 0,
-    pickedWithMetadata: 0,
-    duplicates: 0,
-    errors: 0
+    pickedCount: 0,
+    withGeoCount: 0,
+    withImageDateCount: 0,
+    withCameraCount: 0,
+    duplicateCount: 0,
+    errorCount: 0
   };
 
   const lsh = new LSH();
@@ -211,23 +199,24 @@ async function deduplicateFiles(
     const ext = extname(file).slice(1).toLowerCase();
     if (!formatStats.has(ext)) {
       formatStats.set(ext, {
-        count: 1,
+        totalCount: 1,
         processedCount: 0,
-        duplicates: 0,
-        errors: 0,
-        picked: 0,
-        pickedWithGeo: 0,
-        pickedWithMetadata: 0
+        pickedCount: 0,
+        withGeoCount: 0,
+        withImageDateCount: 0,
+        withCameraCount: 0,
+        duplicateCount: 0,
+        errorCount: 0
       });
     } else {
-      formatStats.get(ext)!.count++;
+      formatStats.get(ext)!.totalCount++;
     }
   }
 
   // Initialize MultiBar
   const multibar = new cliProgress.MultiBar({
     hideCursor: true,
-    format: '{format} {bar} {percentage}% | {value}/{total} | P:{picked} G:{geo} M:{meta} D:{dup} E:{err}',
+    format: '{format} {bar} {percentage}% | {value}/{total} | P:{picked} G:{geo} D:{dated} C:{camera} Dup:{dup} E:{err}',
     autopadding: true,
   }, cliProgress.Presets.shades_classic);
 
@@ -235,53 +224,60 @@ async function deduplicateFiles(
   const formatBars: Map<string, cliProgress.SingleBar> = new Map();
 
   for (const [ext, stats] of formatStats.entries()) {
-    formatBars.set(ext, multibar.create(stats.count, 0, { 
+    formatBars.set(ext, multibar.create(stats.totalCount, 0, { 
       format: ext.padEnd(10), 
-      picked: stats.picked,
-      geo: stats.pickedWithGeo,
-      meta: stats.pickedWithMetadata,
-      dup: stats.duplicates,
-      err: stats.errors
+      picked: stats.pickedCount,
+      geo: stats.withGeoCount,
+      dated: stats.withImageDateCount,
+      camera: stats.withCameraCount,
+      dup: stats.duplicateCount,
+      err: stats.errorCount
     }));
   }
 
   // Initialize overall progress bar with ETA
-  const totalFiles = files.length;
-  const overallBar = multibar.create(totalFiles, 0, {
+  const overallBar = multibar.create(overallStats.totalCount, 0, {
     format: 'Total'.padEnd(10),
     picked: 0,
     geo: 0,
-    meta: 0,
+    dated: 0,
+    camera: 0,
     dup: 0,
     err: 0
   }, {
-    format: '{format} {bar} {percentage}% | {value}/{total} | P:{picked} G:{geo} M:{meta} D:{dup} E:{err} | ETA: {eta_formatted}',
+    format: '{format} {bar} {percentage}% | {value}/{total} | P:{picked} G:{geo} D:{dated} C:{camera} Dup:{dup} E:{err} | ETA: {eta_formatted}',
   });
 
   // Initialize semaphore for concurrency control
   const semaphore = new Semaphore(concurrency);
   const fileMutex = new Mutex();
 
-  function updateFormatStats(ext: string, updates: Partial<FormatStats>) {
-    const stats = formatStats.get(ext)!;
+  function updateStats(stats: Stats, updates: Partial<Stats>) {
     Object.assign(stats, updates);
+    return stats;
+  }
+
+  function updateFormatStats(ext: string, updates: Partial<Stats>) {
+    const stats = updateStats(formatStats.get(ext)!, updates);
     formatBars.get(ext)?.update(stats.processedCount, {
-      picked: stats.picked,
-      geo: stats.pickedWithGeo,
-      meta: stats.pickedWithMetadata,
-      dup: stats.duplicates,
-      err: stats.errors
+      picked: stats.pickedCount,
+      geo: stats.withGeoCount,
+      dated: stats.withImageDateCount,
+      camera: stats.withCameraCount,
+      dup: stats.duplicateCount,
+      err: stats.errorCount
     });
   }
 
-  function updateOverallStats(updates: Partial<OverallStats>) {
-    Object.assign(overallStats, updates);
+  function updateOverallStats(updates: Partial<Stats>) {
+    updateStats(overallStats, updates);
     overallBar.update(overallStats.processedCount, {
-      picked: overallStats.pickedFiles,
-      geo: overallStats.pickedWithGeo,
-      meta: overallStats.pickedWithMetadata,
-      dup: overallStats.duplicates,
-      err: overallStats.errors
+      picked: overallStats.pickedCount,
+      geo: overallStats.withGeoCount,
+      dated: overallStats.withImageDateCount,
+      camera: overallStats.withCameraCount,
+      dup: overallStats.duplicateCount,
+      err: overallStats.errorCount
     });
   }
 
@@ -294,20 +290,20 @@ async function deduplicateFiles(
       const newExt = extname(fileInfo.path).slice(1).toLowerCase();
       
       // Decrease stats for old best file
-      const oldStats = formatStats.get(oldExt)!;
       updateFormatStats(oldExt, {
-        picked: oldStats.picked - 1,
-        pickedWithGeo: oldStats.pickedWithGeo - (oldBestFile.hasGeolocation ? 1 : 0),
-        pickedWithMetadata: oldStats.pickedWithMetadata - (oldBestFile.hasBasicMetadata ? 1 : 0),
-        duplicates: oldStats.duplicates + 1
+        pickedCount: formatStats.get(oldExt)!.pickedCount - 1,
+        withGeoCount: formatStats.get(oldExt)!.withGeoCount - (oldBestFile.geoLocation ? 1 : 0),
+        withImageDateCount: formatStats.get(oldExt)!.withImageDateCount - (oldBestFile.imageDate ? 1 : 0),
+        withCameraCount: formatStats.get(oldExt)!.withCameraCount - (oldBestFile.cameraModel ? 1 : 0),
+        duplicateCount: formatStats.get(oldExt)!.duplicateCount + 1
       });
 
       // Increase stats for new best file
-      const newStats = formatStats.get(newExt)!;
       updateFormatStats(newExt, {
-        picked: newStats.picked + 1,
-        pickedWithGeo: newStats.pickedWithGeo + (fileInfo.hasGeolocation ? 1 : 0),
-        pickedWithMetadata: newStats.pickedWithMetadata + (fileInfo.hasBasicMetadata ? 1 : 0)
+        pickedCount: formatStats.get(newExt)!.pickedCount + 1,
+        withGeoCount: formatStats.get(newExt)!.withGeoCount + (fileInfo.geoLocation ? 1 : 0),
+        withImageDateCount: formatStats.get(newExt)!.withImageDateCount + (fileInfo.imageDate ? 1 : 0),
+        withCameraCount: formatStats.get(newExt)!.withCameraCount + (fileInfo.cameraModel ? 1 : 0)
       });
 
       uniqueFiles.delete(oldBestFile.hash);
@@ -382,17 +378,18 @@ async function deduplicateFiles(
           const isNewBest = handleDuplicate(fileInfo, duplicateSet);
           if (!isNewBest) {
             updateFormatStats(ext, {
-              processedCount: stats.processedCount + 1,
-              duplicates: stats.duplicates + 1
+              processedCount: formatStats.get(ext)!.processedCount + 1,
+              duplicateCount: formatStats.get(ext)!.duplicateCount + 1
             });
           }
         } else {
           uniqueFiles.set(fileInfo.hash, fileInfo);
           updateFormatStats(ext, {
-            processedCount: stats.processedCount + 1,
-            picked: stats.picked + 1,
-            pickedWithGeo: stats.pickedWithGeo + (fileInfo.hasGeolocation ? 1 : 0),
-            pickedWithMetadata: stats.pickedWithMetadata + (fileInfo.hasBasicMetadata ? 1 : 0)
+            processedCount: formatStats.get(ext)!.processedCount + 1,
+            pickedCount: formatStats.get(ext)!.pickedCount + 1,
+            withGeoCount: formatStats.get(ext)!.withGeoCount + (fileInfo.geoLocation ? 1 : 0),
+            withImageDateCount: formatStats.get(ext)!.withImageDateCount + (fileInfo.imageDate ? 1 : 0),
+            withCameraCount: formatStats.get(ext)!.withCameraCount + (fileInfo.cameraModel ? 1 : 0)
           });
           if (fileInfo.perceptualHash) {
             lsh.add(fileInfo.perceptualHash, fileInfo.hash);
@@ -403,22 +400,22 @@ async function deduplicateFiles(
 
       updateOverallStats({
         processedCount: overallStats.processedCount + 1,
-        pickedFiles: uniqueFiles.size,
-        pickedWithGeo: Array.from(uniqueFiles.values()).filter(f => f.hasGeolocation).length,
-        pickedWithMetadata: Array.from(uniqueFiles.values()).filter(f => f.hasBasicMetadata).length,
-        duplicates: Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)
+        pickedCount: uniqueFiles.size,
+        withGeoCount: Array.from(uniqueFiles.values()).filter(f => f.geoLocation).length,
+        withImageDateCount: Array.from(uniqueFiles.values()).filter(f => f.imageDate).length,
+        withCameraCount: Array.from(uniqueFiles.values()).filter(f => f.cameraModel).length,
+        duplicateCount: Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)
       });
 
     } catch (error) {
       errorFiles.push(filePath);
-      const stats = formatStats.get(ext)!;
       updateFormatStats(ext, {
-        processedCount: stats.processedCount + 1,
-        errors: stats.errors + 1
+        processedCount: formatStats.get(ext)!.processedCount + 1,
+        errorCount: formatStats.get(ext)!.errorCount + 1
       });
       updateOverallStats({
         processedCount: overallStats.processedCount + 1,
-        errors: overallStats.errors + 1
+        errorCount: overallStats.errorCount + 1
       });
     }
   }
@@ -436,46 +433,44 @@ async function deduplicateFiles(
   // Updated final console output
   console.log(chalk.green(`\nDeduplication completed:`));
   console.log(chalk.cyan(`- Total files processed: ${overallStats.processedCount}`));
-  console.log(chalk.cyan(`- Picked files (unique + best from duplicates): ${overallStats.pickedFiles}`));
-  console.log(chalk.cyan(`- Picked files with geolocation data: ${overallStats.pickedWithGeo}`));
-  console.log(chalk.cyan(`- Picked files with basic metadata (capture date or camera model): ${overallStats.pickedWithMetadata}`));
+  console.log(chalk.cyan(`- Picked files (unique + best from duplicates): ${overallStats.pickedCount}`));
+  console.log(chalk.cyan(`- Files with geolocation data: ${overallStats.withGeoCount}`));
+  console.log(chalk.cyan(`- Files with image date: ${overallStats.withImageDateCount}`));
+  console.log(chalk.cyan(`- Files with camera information: ${overallStats.withCameraCount}`));
   console.log(chalk.yellow(`- Duplicate sets: ${duplicateSets.size}`));
-  console.log(chalk.yellow(`- Total duplicates: ${overallStats.duplicates}`));
-  console.log(chalk.red(`- Errors encountered: ${overallStats.errors}`));
+  console.log(chalk.yellow(`- Total duplicates: ${overallStats.duplicateCount}`));
+  console.log(chalk.red(`- Errors encountered: ${overallStats.errorCount}`));
 
   console.log(chalk.blue('\nFormat Statistics:'));
   for (const [format, stats] of formatStats) {
-    console.log(chalk.white(`${format.padEnd(10)}: ${stats.count.toString().padStart(5)} total, ${stats.picked.toString().padStart(5)} picked, ${stats.pickedWithGeo.toString().padStart(5)} w/geo, ${stats.pickedWithMetadata.toString().padStart(5)} w/metadata, ${stats.duplicates.toString().padStart(5)} duplicates, ${stats.errors.toString().padStart(5)} errors`));
+    console.log(chalk.white(`${format.padEnd(10)}: ${stats.totalCount.toString().padStart(5)} total, ${stats.pickedCount.toString().padStart(5)} picked, ${stats.withGeoCount.toString().padStart(5)} w/geo, ${stats.withImageDateCount.toString().padStart(5)} w/date, ${stats.withCameraCount.toString().padStart(5)} w/camera, ${stats.duplicateCount.toString().padStart(5)} duplicates, ${stats.errorCount.toString().padStart(5)} errors`));
   }
 
   return {
     uniqueFiles,
     duplicateSets,
-    errorFiles,
     formatStats,
-    stats: {
-      totalFiles: files.length,
-      pickedFiles: overallStats.pickedFiles,
-      pickedWithGeo: overallStats.pickedWithGeo,
-      pickedWithMetadata: overallStats.pickedWithMetadata,
-      duplicateSets: duplicateSets.size,
-      totalDuplicates: overallStats.duplicates
-    }
+    overallStats,
+    errorFiles
   };
 }
 
 function selectBestFile(files: FileInfo[]): FileInfo {
   return files.reduce((best, current) => {
-    // Prioritize files with basic metadata
-    if (current.hasBasicMetadata && !best.hasBasicMetadata) return current;
-    if (best.hasBasicMetadata && !current.hasBasicMetadata) return best;
+    // Prioritize files with image date
+    if (current.imageDate && !best.imageDate) return current;
+    if (best.imageDate && !current.imageDate) return best;
 
-    // If both have basic metadata or both don't, prioritize files with geolocation data
-    if (current.hasGeolocation && !best.hasGeolocation) return current;
-    if (best.hasGeolocation && !current.hasGeolocation) return best;
+    // If both have image date or both don't, prioritize files with geolocation data
+    if (current.geoLocation && !best.geoLocation) return current;
+    if (best.geoLocation && !current.geoLocation) return best;
 
-    // If both have the same metadata status, prefer higher quality for images
-    if (current.quality && best.quality) {
+    // If geolocation is the same, prioritize files with camera information
+    if (current.cameraModel && !best.cameraModel) return current;
+    if (best.cameraModel && !current.cameraModel) return best;
+
+    // If all metadata is the same, prefer higher quality for images
+    if (current.quality !== undefined && best.quality !== undefined) {
       if (current.quality > best.quality) return current;
       if (best.quality > current.quality) return best;
     }
@@ -490,10 +485,10 @@ function selectBestFile(files: FileInfo[]): FileInfo {
 async function transferFiles(
   uniqueFiles: Map<string, FileInfo>,
   duplicateSets: Map<string, DuplicateSet>,
-  errorFiles: string[], // Add this parameter
+  errorFiles: string[],
   targetDir: string,
   duplicateDir: string | undefined,
-  errorDir: string | undefined, // Add this parameter
+  errorDir: string | undefined,
   debugDir: string | undefined,
   format: string,
   shouldMove: boolean
@@ -503,7 +498,6 @@ async function transferFiles(
     hideCursor: true,
     format: '{phase} ' + chalk.cyan('{bar}') + ' {percentage}% || {value}/{total} Files'
   }, cliProgress.Presets.shades_classic);
-
 
   // Debug mode: Copy all files in duplicate sets
   if (debugDir) {
@@ -530,7 +524,7 @@ async function transferFiles(
   // Transfer unique files
   const uniqueBar = multibar.create(uniqueFiles.size, 0, { phase: 'Unique  ' });
   for (const [, fileInfo] of uniqueFiles) {
-    const targetPath = generateTargetPath(format, targetDir, fileInfo.imageDate, basename(fileInfo.path));
+    const targetPath = generateTargetPath(format, targetDir, fileInfo);
     await transferOrCopyFile(fileInfo.path, targetPath, !shouldMove);
     uniqueBar.increment();
   }
@@ -557,7 +551,7 @@ async function transferFiles(
     const bestFileBar = multibar.create(duplicateSets.size, 0, { phase: 'Best File' });
     for (const [, duplicateSet] of duplicateSets) {
       const bestFile = duplicateSet.bestFile;
-      const targetPath = generateTargetPath(format, targetDir, bestFile.imageDate, basename(bestFile.path));
+      const targetPath = generateTargetPath(format, targetDir, bestFile);
       await transferOrCopyFile(bestFile.path, targetPath, !shouldMove);
       bestFileBar.increment();
     }
@@ -696,7 +690,6 @@ function toDate(value: string | ExifDateTime | undefined): Date | undefined {
 }
 
 async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
-  const startTime = Date.now();
   const [fileStat, hash, metadata, imageInfo] = await Promise.all([
     stat(filePath),
     calculateFileHash(filePath),
@@ -705,46 +698,144 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
       ? processImageFile(filePath, resolution)
       : Promise.resolve({ perceptualHash: undefined, quality: undefined })
   ]);
-  const duration = (Date.now() - startTime) / 1000;
-  // console.log(chalk.cyan(`Processed ${filePath} in ${duration.toFixed(2)} seconds`));
-
-  const hasBasicMetadata = !!(metadata.DateTimeOriginal || metadata.CreateDate || metadata.Model);
 
   const fileInfo: FileInfo = {
     path: filePath,
     size: fileStat.size,
     hash,
     imageDate: toDate(metadata.CreateDate),
-    hasGeolocation: !!(metadata.GPSLatitude && metadata.GPSLongitude),
-    hasBasicMetadata,
+    fileDate: fileStat.mtime,  // Added
     perceptualHash: imageInfo.perceptualHash,
-    quality: imageInfo.quality
+    quality: imageInfo.quality,
+    geoLocation: metadata.GPSLatitude && metadata.GPSLongitude ? `${metadata.GPSLatitude},${metadata.GPSLongitude}` : undefined,
+    cameraModel: metadata.Model
   };
 
   return fileInfo;
 }
-
-function generateTargetPath(format: string, targetDir: string, date: Date | undefined, fileName: string): string {
-  if (!date) {
-    return join(targetDir, 'Unknown Date', fileName);
-  } else {
-    const yearFull = date.getFullYear().toString();
-    const yearShort = yearFull.slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-
-    const formatParts = format.split('/');
-    const processedParts = formatParts.map(part => {
-      return part
-        .replace('YYYY', yearFull)
-        .replace('YY', yearShort)
-        .replace('MM', month)
-        .replace('DD', day);
-    });
-
-    const path = join(targetDir, ...processedParts);
-    return join(path, fileName);
+function getWeek(date: Date | undefined): string {
+  if (!date) return '';
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1)/7).toString().padStart(2, '0');
 }
+
+function formatDate(date: Date | undefined, format: string): string {
+  if (!date) return '';
+  const options: Intl.DateTimeFormatOptions = {
+    year: format.includes('YYYY') ? 'numeric' : format.includes('YY') ? '2-digit' : undefined,
+    month: format.includes('MMMM') ? 'long' : format.includes('MMM') ? 'short' : format.includes('MM') ? '2-digit' : 'numeric',
+    day: format.includes('DD') ? '2-digit' : 'numeric',
+    hour: format.includes('hh') ? '2-digit' : 'numeric',
+    minute: format.includes('mm') ? '2-digit' : 'numeric',
+    second: format.includes('ss') ? '2-digit' : 'numeric',
+    hour12: format.includes('a') || format.includes('A'),
+    weekday: format.includes('DDDD') ? 'long' : format.includes('DDD') ? 'short' : undefined,
+  };
+  let formatted = new Intl.DateTimeFormat('en-US', options).format(date);
+  if (format.includes('a')) {
+    formatted = formatted.replace(/AM|PM/, (match) => match.toLowerCase());
+  }
+  return formatted.replace(/[^\w]/g, '');
+}
+
+function generateTargetPath(format: string, targetDir: string, fileInfo: FileInfo): string {
+  const mixedDate = fileInfo.imageDate || fileInfo.fileDate;
+  const { name, ext } = parse(fileInfo.path);
+  
+  const data: { [key: string]: string } = {
+    // Image date placeholders
+    'I.YYYY': formatDate(fileInfo.imageDate, 'YYYY'),
+    'I.YY': formatDate(fileInfo.imageDate, 'YY'),
+    'I.MMMM': formatDate(fileInfo.imageDate, 'MMMM'),
+    'I.MMM': formatDate(fileInfo.imageDate, 'MMM'),
+    'I.MM': formatDate(fileInfo.imageDate, 'MM'),
+    'I.M': formatDate(fileInfo.imageDate, 'M'),
+    'I.DD': formatDate(fileInfo.imageDate, 'DD'),
+    'I.D': formatDate(fileInfo.imageDate, 'D'),
+    'I.DDDD': formatDate(fileInfo.imageDate, 'DDDD'),
+    'I.DDD': formatDate(fileInfo.imageDate, 'DDD'),
+    'I.HH': formatDate(fileInfo.imageDate, 'HH'),
+    'I.H': formatDate(fileInfo.imageDate, 'H'),
+    'I.hh': formatDate(fileInfo.imageDate, 'hh'),
+    'I.h': formatDate(fileInfo.imageDate, 'h'),
+    'I.mm': formatDate(fileInfo.imageDate, 'mm'),
+    'I.m': formatDate(fileInfo.imageDate, 'm'),
+    'I.ss': formatDate(fileInfo.imageDate, 'ss'),
+    'I.s': formatDate(fileInfo.imageDate, 's'),
+    'I.a': formatDate(fileInfo.imageDate, 'a'),
+    'I.A': formatDate(fileInfo.imageDate, 'A'),
+    'I.WW': getWeek(fileInfo.imageDate),
+    
+    // File date placeholders
+    'F.YYYY': formatDate(fileInfo.fileDate, 'YYYY'),
+    'F.YY': formatDate(fileInfo.fileDate, 'YY'),
+    'F.MMMM': formatDate(fileInfo.fileDate, 'MMMM'),
+    'F.MMM': formatDate(fileInfo.fileDate, 'MMM'),
+    'F.MM': formatDate(fileInfo.fileDate, 'MM'),
+    'F.M': formatDate(fileInfo.fileDate, 'M'),
+    'F.DD': formatDate(fileInfo.fileDate, 'DD'),
+    'F.D': formatDate(fileInfo.fileDate, 'D'),
+    'F.DDDD': formatDate(fileInfo.fileDate, 'DDDD'),
+    'F.DDD': formatDate(fileInfo.fileDate, 'DDD'),
+    'F.HH': formatDate(fileInfo.fileDate, 'HH'),
+    'F.H': formatDate(fileInfo.fileDate, 'H'),
+    'F.hh': formatDate(fileInfo.fileDate, 'hh'),
+    'F.h': formatDate(fileInfo.fileDate, 'h'),
+    'F.mm': formatDate(fileInfo.fileDate, 'mm'),
+    'F.m': formatDate(fileInfo.fileDate, 'm'),
+    'F.ss': formatDate(fileInfo.fileDate, 'ss'),
+    'F.s': formatDate(fileInfo.fileDate, 's'),
+    'F.a': formatDate(fileInfo.fileDate, 'a'),
+    'F.A': formatDate(fileInfo.fileDate, 'A'),
+    'F.WW': getWeek(fileInfo.fileDate),
+    
+    // Mixed date placeholders
+    'D.YYYY': formatDate(mixedDate, 'YYYY'),
+    'D.YY': formatDate(mixedDate, 'YY'),
+    'D.MMMM': formatDate(mixedDate, 'MMMM'),
+    'D.MMM': formatDate(mixedDate, 'MMM'),
+    'D.MM': formatDate(mixedDate, 'MM'),
+    'D.M': formatDate(mixedDate, 'M'),
+    'D.DD': formatDate(mixedDate, 'DD'),
+    'D.D': formatDate(mixedDate, 'D'),
+    'D.DDDD': formatDate(mixedDate, 'DDDD'),
+    'D.DDD': formatDate(mixedDate, 'DDD'),
+    'D.HH': formatDate(mixedDate, 'HH'),
+    'D.H': formatDate(mixedDate, 'H'),
+    'D.hh': formatDate(mixedDate, 'hh'),
+    'D.h': formatDate(mixedDate, 'h'),
+    'D.mm': formatDate(mixedDate, 'mm'),
+    'D.m': formatDate(mixedDate, 'm'),
+    'D.ss': formatDate(mixedDate, 'ss'),
+    'D.s': formatDate(mixedDate, 's'),
+    'D.a': formatDate(mixedDate, 'a'),
+    'D.A': formatDate(mixedDate, 'A'),
+    'D.WW': getWeek(mixedDate),
+    
+    // Other placeholders
+    'EXT': ext.slice(1).toLowerCase(),
+    'GEO': fileInfo.geoLocation || '',
+    'CAM': fileInfo.cameraModel || '',
+    'TYPE': fileInfo.quality !== undefined ? 'Image' : 'Other',
+    'HAS.GEO': fileInfo.geoLocation ? 'GeoTagged' : 'NoGeo',
+    'HAS.CAM': fileInfo.cameraModel ? 'WithCamera' : 'NoCamera',
+    'HAS.DATE': fileInfo.imageDate ? 'Dated' : 'NoDate',
+    
+    // Filename placeholders
+    'NAME': name,
+    'NAME.L': name.toLowerCase(),
+    'NAME.U': name.toUpperCase(),
+  };
+
+  const formattedPath = format.replace(/\{([^{}]+)\}/g, (match, key) => data[key] || match);
+  const [directory, filename] = formattedPath.split('/').reduce(([dir, file], part) => {
+    return file ? [dir, `${file}/${part}`] : [`${dir}/${part}`, ''];
+  }, ['', '']);
+
+  return join(targetDir, directory, filename || basename(fileInfo.path));
 }
 
 async function transferOrCopyFile(sourcePath: string, targetPath: string, isCopy: boolean): Promise<void> {
@@ -771,7 +862,7 @@ async function main() {
 
   program
     .name('media-organizer')
-    .description('Organize photos and videos based on their creation date')
+    .description('Organize photos and videos based on their metadata')
     .version('1.0.0')
     .requiredOption('-s, --source <paths...>', 'Source directories to process')
     .requiredOption('-t, --target <path>', 'Target directory for organized media')
@@ -782,7 +873,42 @@ async function main() {
     .option('-m, --move', 'Move files instead of copying them', false)
     .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '64')
     .option('-h, --hamming <number>', 'Hamming distance threshold (default: 10)', '10')
-    .option('-f, --format <string>', 'Format for target directory (default: YYYY/MM)', 'YYYY/MM')
+    .option('-f, --format <string>', 'Format for target directory (default: {D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT})', '{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}')
+    .addHelpText('after', `
+Format string placeholders:
+  Image date (I.), File date (F.), Mixed date (D.):
+    {*.YYYY} - Year (4 digits)       {*.YY} - Year (2 digits)
+    {*.MMMM} - Month (full name)     {*.MMM} - Month (short name)
+    {*.MM} - Month (2 digits)        {*.M} - Month (1-2 digits)
+    {*.DD} - Day (2 digits)          {*.D} - Day (1-2 digits)
+    {*.DDDD} - Day (full name)       {*.DDD} - Day (short name)
+    {*.HH} - Hour, 24h (2 digits)    {*.H} - Hour, 24h (1-2 digits)
+    {*.hh} - Hour, 12h (2 digits)    {*.h} - Hour, 12h (1-2 digits)
+    {*.mm} - Minute (2 digits)       {*.m} - Minute (1-2 digits)
+    {*.ss} - Second (2 digits)       {*.s} - Second (1-2 digits)
+    {*.a} - am/pm                    {*.A} - AM/PM
+    {*.WW} - Week of year (2 digits)
+
+  Filename:
+    {NAME} - Original filename (without extension)
+    {NAME.L} - Lowercase filename
+    {NAME.U} - Uppercase filename
+    {EXT} - File extension (without dot)
+
+  Other:
+    {GEO} - Geolocation              {CAM} - Camera model
+    {TYPE} - 'Image' or 'Other'
+    {HAS.GEO} - 'GeoTagged' or 'NoGeo'
+    {HAS.CAM} - 'WithCamera' or 'NoCamera'
+    {HAS.DATE} - 'Dated' or 'NoDate'
+
+Example format strings:
+  "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}"
+  "{HAS.GEO}/{HAS.CAM}/{D.YYYY}/{D.MM}/{NAME}_{D.HH}{D.mm}.{EXT}"
+  "{TYPE}/{D.YYYY}/{D.WW}/{CAM}/{D.YYYY}{D.MM}{D.DD}_{NAME.L}.{EXT}"
+  "{HAS.DATE}/{D.YYYY}/{D.MMMM}/{D.D}-{D.DDDD}/{D.h}{D.mm}{D.a}_{NAME}.{EXT}"
+  "{TYPE}/{CAM}/{D.YYYY}/{D.MM}/{D.DD}_{D.HH}{D.mm}_{NAME.U}.{EXT}"
+    `)
     .parse(process.argv);
 
   const options = program.opts() as ProgramOptions;
