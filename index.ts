@@ -760,7 +760,6 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
   return fileInfo;
 }
 
-console.log(await getFileInfo('/mnt/c/test/NoDate/2024/08/20240813_35d1cfdd.mov' , 64));
 function formatDate(date: Date | undefined, format: string): string {
   if (!date || isNaN(date.getTime())) {
     return '';
