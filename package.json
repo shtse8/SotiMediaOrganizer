@@ -1,11 +1,13 @@
 {
-  "name": "photo_organizer",
+  "name": "SotiMediaOrganizer",
   "version": "1.0.0",
-  "description": "A powerful CLI tool to organize photos based on their creation date",
+  "description": "A powerful CLI tool to organize photos and videos based on their creation date and metadata, with support for duplicate detection and customizable directory structure.",
   "main": "index.ts",
   "type": "module",
   "scripts": {
-    "start": "node index.ts",
+    "start": "bun run index.ts",
+    "build": "tsc",
+    "start:node": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "shtse8",
@@ -24,24 +26,30 @@
     "ora": "^8.0.1",
     "sharp": "^0.33.4"
   },
-  "engines": {
-    "node": ">=14.0.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/shtse8/photo_organizer.git"
-  },
-  "keywords": [
-    "photo",
-    "organizer",
-    "cli",
-    "exif",
-    "date"
-  ],
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
-  }
+  },
+  "engines": {
+    "node": ">=14.0.0",
+    "bun": ">=0.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shtse8/SotiMediaOrganizer.git"
+  },
+  "keywords": [
+    "photo",
+    "video",
+    "organizer",
+    "cli",
+    "exif",
+    "metadata",
+    "date",
+    "bun",
+    "typescript"
+  ]
 }
