@@ -11,6 +11,7 @@ import { Buffer } from 'buffer';
 import ora from 'ora';
 import { createReadStream } from 'fs';
 import os from 'os';
+import { existsSync } from 'fs';
 
 
 
@@ -723,7 +724,10 @@ function getWeek(date: Date | undefined): string {
 }
 
 function formatDate(date: Date | undefined, format: string): string {
-  if (!date) return '';
+  if (!date || isNaN(date.getTime())) {
+    return 'InvalidDate';
+  }
+  
   const options: Intl.DateTimeFormatOptions = {
     year: format.includes('YYYY') ? 'numeric' : format.includes('YY') ? '2-digit' : undefined,
     month: format.includes('MMMM') ? 'long' : format.includes('MMM') ? 'short' : format.includes('MM') ? '2-digit' : 'numeric',
@@ -734,17 +738,27 @@ function formatDate(date: Date | undefined, format: string): string {
     hour12: format.includes('a') || format.includes('A'),
     weekday: format.includes('DDDD') ? 'long' : format.includes('DDD') ? 'short' : undefined,
   };
-  let formatted = new Intl.DateTimeFormat('en-US', options).format(date);
-  if (format.includes('a')) {
-    formatted = formatted.replace(/AM|PM/, (match) => match.toLowerCase());
+
+  try {
+    let formatted = new Intl.DateTimeFormat('en-US', options).format(date);
+    if (format.includes('a')) {
+      formatted = formatted.replace(/AM|PM/, (match) => match.toLowerCase());
+    }
+    return formatted.replace(/[^\w]/g, '');
+  } catch (error) {
+    console.error(`Error formatting date: ${error}`);
+    return 'InvalidDate';
   }
-  return formatted.replace(/[^\w]/g, '');
 }
 
 function generateTargetPath(format: string, targetDir: string, fileInfo: FileInfo): string {
   const mixedDate = fileInfo.imageDate || fileInfo.fileDate;
   const { name, ext } = parse(fileInfo.path);
   
+  function generateRandomId(): string {
+    return crypto.randomBytes(4).toString('hex');
+  }
+
   const data: { [key: string]: string } = {
     // Image date placeholders
     'I.YYYY': formatDate(fileInfo.imageDate, 'YYYY'),
@@ -822,20 +836,45 @@ function generateTargetPath(format: string, targetDir: string, fileInfo: FileInf
     'TYPE': fileInfo.quality !== undefined ? 'Image' : 'Other',
     'HAS.GEO': fileInfo.geoLocation ? 'GeoTagged' : 'NoGeo',
     'HAS.CAM': fileInfo.cameraModel ? 'WithCamera' : 'NoCamera',
-    'HAS.DATE': fileInfo.imageDate ? 'Dated' : 'NoDate',
+    'HAS.DATE': (fileInfo.imageDate && !isNaN(fileInfo.imageDate.getTime())) || 
+                (fileInfo.fileDate && !isNaN(fileInfo.fileDate.getTime())) ? 'Dated' : 'NoDate',
     
     // Filename placeholders
     'NAME': name,
     'NAME.L': name.toLowerCase(),
     'NAME.U': name.toUpperCase(),
+    'RND': generateRandomId(),  // New random ID placeholder
   };
 
-  const formattedPath = format.replace(/\{([^{}]+)\}/g, (match, key) => data[key] || match);
-  const [directory, filename] = formattedPath.split('/').reduce(([dir, file], part) => {
-    return file ? [dir, `${file}/${part}`] : [`${dir}/${part}`, ''];
-  }, ['', '']);
+  let formattedPath = format.replace(/\{([^{}]+)\}/g, (match, key) => {
+    const value = data[key];
+    return value === 'InvalidDate' ? 'NoDate' : (value || match);
+  });
 
-  return join(targetDir, directory, filename || basename(fileInfo.path));
+  // Split the path into directory and filename
+  const parts = formattedPath.split('/');
+  const lastPart = parts[parts.length - 1];
+  let directory, filename;
+
+  if (lastPart.includes('.') && lastPart.split('.').pop() === data['EXT']) {
+    // If the last part contains a dot and ends with the correct extension, it's a filename
+    directory = parts.slice(0, -1).join('/');
+    filename = lastPart;
+  } else {
+    // Otherwise, treat the whole path as a directory
+    directory = formattedPath;
+    filename = `${name}${ext}`; // Use the original filename
+  }
+
+  let fullPath = join(targetDir, directory, filename);
+
+  // Handle file name conflicts
+  while (existsSync(fullPath)) {
+    const { name: conflictName, ext: conflictExt } = parse(fullPath);
+    fullPath = join(dirname(fullPath), `${conflictName}_${generateRandomId()}${conflictExt}`);
+  }
+
+  return fullPath;
 }
 
 async function transferOrCopyFile(sourcePath: string, targetPath: string, isCopy: boolean): Promise<void> {
@@ -894,6 +933,7 @@ Format string placeholders:
     {NAME.L} - Lowercase filename
     {NAME.U} - Uppercase filename
     {EXT} - File extension (without dot)
+    {RND} - Random 8-character hexadecimal string (for unique filenames)
 
   Other:
     {GEO} - Geolocation              {CAM} - Camera model
