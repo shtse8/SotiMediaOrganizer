@@ -52,6 +52,7 @@ interface ProgramOptions {
   workers: string;
   move: boolean;
   resolution: string;
+  frameCount: string;
   hamming: string;
   format: string;
 }
@@ -174,6 +175,7 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
 async function deduplicateFiles(
   files: string[],
   resolution: number,
+  frameCount: number,
   hammingThreshold: number,
   concurrency: number = 3
 ): Promise<DeduplicationResult> {
@@ -327,7 +329,7 @@ async function deduplicateFiles(
   async function processFile(filePath: string) {
     const ext = extname(filePath).slice(1).toLowerCase();
     try {
-      const fileInfo = await getFileInfo(filePath, resolution);
+      const fileInfo = await getFileInfo(filePath, resolution, frameCount);
 
       await fileMutex.runExclusive(async () => {
         let isDuplicate = false;
@@ -663,28 +665,46 @@ async function getImagePerceptualHash(filePath: string, resolution: number): Pro
 
 async function getVideoPerceptualHash(filePath: string, numFrames: number = 10, resolution: number = 8): Promise<string> {
   return new Promise((resolve, reject) => {
-    const frameBuffers: Buffer[] = [];
-
-    ffmpeg(filePath)
-      .on('error', (err) => {
-        // console.error(`Error processing video file ${filePath}:`, err);
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
         return reject(err);
-      })
-      .on('end', async () => {
-        try {
-          const combinedHash = await combineFrameHashes(frameBuffers, resolution);
-          resolve(combinedHash);
-        } catch (error) {
-          reject(error);
-        }
-      })
-      .videoFilters(`select='not(mod(n,${Math.floor(numFrames / 5)}))',scale=${resolution}:${resolution},format=gray`)
-      .frames(numFrames)
-      .outputOptions('-vcodec', 'rawvideo', '-f', 'rawvideo', '-pix_fmt', 'gray')
-      .pipe()
-      .on('data', (chunk) => {
-        frameBuffers.push(chunk);
-      });
+      }
+
+      const duration = metadata.format.duration;
+      if (!duration) {
+        return reject(new Error('Could not determine video duration.'));
+      }
+
+      // Calculate the interval for frame selection
+      const interval = Math.max(1, duration / (numFrames + 1));
+
+      const frameBuffers: Buffer[] = [];
+
+      ffmpeg(filePath)
+        .on('error', (err) => {
+          return reject(err);
+        })
+        .on('end', async () => {
+          try {
+            if (frameBuffers.length <= 0) {
+              return reject(new Error('No frames extracted from video.'));
+            }
+            console.log('number of frames:', frameBuffers.length, numFrames);
+            const combinedHash = await combineFrameHashes(frameBuffers, resolution);
+            resolve(combinedHash);
+          } catch (error) {
+            reject(error);
+          }
+        })
+        .videoFilters(
+          `select='(isnan(prev_selected_t)*gte(t\\,${interval}))+gte(t-prev_selected_t\\,${interval})',scale=${resolution}:${resolution},format=gray`
+        )
+        .outputOptions('-vsync', 'vfr', '-vcodec', 'rawvideo', '-f', 'rawvideo', '-pix_fmt', 'gray')
+        .pipe()
+        .on('data', (chunk) => {
+          frameBuffers.push(chunk);
+        });
+    });
   });
 }
 
@@ -731,7 +751,7 @@ function toDate(value: string | ExifDateTime | ExifDate | undefined): Date | und
   return undefined;
 }
 
-async function getFileInfo(filePath: string, resolution: number): Promise<FileInfo> {
+async function getFileInfo(filePath: string, resolution: number, frameCount: number): Promise<FileInfo> {
   const [fileStat, hash, metadata, perceptualHash] = await Promise.all([
     stat(filePath),
     calculateFileHash(filePath),
@@ -739,7 +759,7 @@ async function getFileInfo(filePath: string, resolution: number): Promise<FileIn
     isImageFile(filePath) 
       ? getImagePerceptualHash(filePath, resolution)
       : isVideoFile(filePath)
-      ? getVideoPerceptualHash(filePath, 5, resolution)
+      ? getVideoPerceptualHash(filePath, frameCount, resolution)
       : Promise.resolve(undefined)
   ]);
 
@@ -965,6 +985,7 @@ async function main() {
     .option('-w, --workers <number>', 'Number of concurrent workers', '5')
     .option('-m, --move', 'Move files instead of copying them', false)
     .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '64')
+    .option('--frame-count <number>', 'Number of frames to extract from videos for perceptual hashing (default: 5)', '5')
     .option('-h, --hamming <number>', 'Hamming distance threshold (default: 10)', '10')
     .option('-f, --format <string>', 'Format for target directory (default: {D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT})', '{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}')
     .addHelpText('after', `
@@ -1020,6 +1041,11 @@ Example format strings:
     throw new Error('Resolution must be a positive number');
   }
 
+  const frameCount = parseInt(options.frameCount, 10);
+  if (frameCount <= 0) {
+    throw new Error('Frame count must be a positive number');
+  }
+
   const hammingThreshold = parseInt(options.hamming, 10);
   if (hammingThreshold < 0) {
     throw new Error('Hamming threshold must be a non-negative number');
@@ -1031,7 +1057,7 @@ Example format strings:
 
   // Stage 2: Deduplication
   console.log(chalk.blue('\nStage 2: Deduplicating files...'));
-  const { uniqueFiles, duplicateSets, errorFiles } = await deduplicateFiles(discoveredFiles, resolution, hammingThreshold);
+  const { uniqueFiles, duplicateSets, errorFiles } = await deduplicateFiles(discoveredFiles, resolution, frameCount, hammingThreshold);
 
   // Stage 3: File Transfer
   console.log(chalk.blue('\nStage 3: Transferring files...'));
