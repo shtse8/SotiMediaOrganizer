@@ -81,10 +81,14 @@ class LSH {
   private bandSize: number;
   private numBands: number;
 
-  constructor(hashSize: number = 64, numBands: number = 8) {
-    this.bandSize = hashSize / numBands;
-    this.numBands = numBands;
-    this.bands = Array.from({ length: numBands }, () => new Map<string, Set<string>>());
+  constructor(hashSize: number = 64) {
+    if (hashSize <= 0) {
+      throw new Error('Hash size must be a positive integer');
+    }
+    
+    this.bandSize = Math.ceil(Math.sqrt(hashSize));
+    this.numBands = Math.ceil(hashSize / this.bandSize);
+    this.bands = Array.from({ length: this.numBands }, () => new Map<string, Set<string>>());
   }
 
   add(hash: string, identifier: string) {
@@ -127,7 +131,7 @@ class LSH {
 
 
 // Stage 1: File Discovery
-async function discoverFiles(sourceDirs: string[], concurrency: number = 10, logInterval: number = 10000): Promise<string[]> {
+async function discoverFiles(sourceDirs: string[], concurrency: number = 10): Promise<string[]> {
   const allFiles: string[] = [];
   let dirCount = 0;
   let fileCount = 0;
@@ -144,8 +148,10 @@ async function discoverFiles(sourceDirs: string[], concurrency: number = 10, log
       for (const entry of entries) {
         const entryPath = join(dirPath, entry.name);
         if (entry.isDirectory()) {
-          const [_, release] = await semaphore.acquire();
-          scanDirectory(entryPath).finally(() => release());
+          (async () =>  {
+            const [_, release] = await semaphore.acquire();
+            scanDirectory(entryPath).finally(() => release());
+          })();
         } else if (supportedExtensions.has(extname(entry.name).slice(1).toLowerCase())) {
           allFiles.push(entryPath);
           fileCount++;
@@ -194,8 +200,9 @@ async function deduplicateFiles(
     duplicateCount: 0,
     errorCount: 0
   };
-
-  const lsh = new LSH();
+  const overallStartTime = Date.now();
+  const hashSize = resolution * resolution;
+  const lsh = new LSH(hashSize);
 
   // Count the number of files for each format
   for (const file of files) {
@@ -220,7 +227,8 @@ async function deduplicateFiles(
   const multibar = new cliProgress.MultiBar({
     hideCursor: true,
     format: '{format} {bar} {percentage}% | {value}/{total} | P:{picked} G:{geo} D:{dated} C:{camera} Dup:{dup} E:{err}',
-    autopadding: true,
+    // autopadding: true,
+    barsize: 30
   }, cliProgress.Presets.shades_classic);
 
   // Initialize individual progress bars for each format
@@ -228,7 +236,7 @@ async function deduplicateFiles(
 
   for (const [ext, stats] of formatStats.entries()) {
     formatBars.set(ext, multibar.create(stats.totalCount, 0, { 
-      format: ext.padEnd(10), 
+      format: ext.padEnd(6), 
       picked: stats.pickedCount,
       geo: stats.withGeoCount,
       dated: stats.withImageDateCount,
@@ -240,7 +248,7 @@ async function deduplicateFiles(
 
   // Initialize overall progress bar with ETA
   const overallBar = multibar.create(overallStats.totalCount, 0, {
-    format: 'Total'.padEnd(10),
+    format: 'Total'.padEnd(6),
     picked: 0,
     geo: 0,
     dated: 0,
@@ -250,6 +258,7 @@ async function deduplicateFiles(
   }, {
     format: '{format} {bar} {percentage}% | {value}/{total} | P:{picked} G:{geo} D:{dated} C:{camera} Dup:{dup} E:{err} | ETA: {eta_formatted}',
   });
+
 
   // Initialize semaphore for concurrency control
   const semaphore = new Semaphore(concurrency);
@@ -431,7 +440,7 @@ async function deduplicateFiles(
   await semaphore.waitForUnlock(concurrency);
 
   multibar.stop();
-
+  
   // Updated final console output
   console.log(chalk.green(`\nDeduplication completed:`));
   console.log(chalk.cyan(`- Total files processed: ${overallStats.processedCount}`));
@@ -632,14 +641,13 @@ async function getImagePerceptualHash(filePath: string, resolution: number): Pro
 
   try {
     const perceptualHashData = await image
-        .jpeg()
         .resize(resolution, resolution, { fit: 'fill' })
         .greyscale()
         .raw()
-        .toBuffer({ resolveWithObject: true });
+        .toBuffer({ resolveWithObject: false });
 
-    // Calculate perceptual hash
-    return getPerceptualHash(perceptualHashData.data, resolution);
+        // Calculate perceptual hash
+    return getPerceptualHash(perceptualHashData, resolution);
   } finally {
     image.destroy();
   }
@@ -963,9 +971,9 @@ async function main() {
     .option('-e, --error <path>', 'Directory for files that couldn\'t be processed')
     .option('-d, --duplicate <path>', 'Directory for duplicate files')
     .option('--debug <path>', 'Debug directory for storing all files in duplicate sets')
-    .option('-w, --workers <number>', 'Number of concurrent workers', '5')
+    .option('-w, --workers <number>', 'Number of concurrent workers (default: number of CPU cores)', os.cpus().length.toString())
     .option('-m, --move', 'Move files instead of copying them', false)
-    .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '64')
+    .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '8')
     .option('--frame-count <number>', 'Number of frames to extract from videos for perceptual hashing (default: 5)', '5')
     .option('-h, --hamming <number>', 'Hamming distance threshold (default: 10)', '10')
     .option('-f, --format <string>', 'Format for target directory (default: {D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT})', '{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}')
@@ -1016,6 +1024,11 @@ Example format strings:
     options.duplicate ? mkdir(options.duplicate, { recursive: true }) : Promise.resolve(),
     options.debug ? mkdir(options.debug, { recursive: true }) : Promise.resolve()
   ]);
+  
+  const workerCount = parseInt(options.workers, 10);
+  if (workerCount <= 0) {
+    throw new Error('Worker count must be a positive number');
+  }
 
   const resolution = parseInt(options.resolution, 10);
   if (resolution <= 0) {
@@ -1034,11 +1047,11 @@ Example format strings:
 
   // Stage 1: File Discovery
   console.log(chalk.blue('Stage 1: Discovering files...'));
-  const discoveredFiles = await discoverFiles(options.source);
+  const discoveredFiles = await discoverFiles(options.source, workerCount);
 
   // Stage 2: Deduplication
   console.log(chalk.blue('\nStage 2: Deduplicating files...'));
-  const { uniqueFiles, duplicateSets, errorFiles } = await deduplicateFiles(discoveredFiles, resolution, frameCount, hammingThreshold);
+  const { uniqueFiles, duplicateSets, errorFiles } = await deduplicateFiles(discoveredFiles, resolution, frameCount, hammingThreshold, workerCount);
 
   // Stage 3: File Transfer
   console.log(chalk.blue('\nStage 3: Transferring files...'));
