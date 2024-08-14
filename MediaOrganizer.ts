@@ -439,7 +439,6 @@ export class MediaOrganizer {
           }
         }
         
-        console.log(chalk.yellow(`Debug mode: All files in duplicate sets have been copied to ${debugDir} for verification.`));
       }
     
       // Transfer unique files
@@ -491,6 +490,9 @@ export class MediaOrganizer {
     
       multibar.stop();
       console.log(chalk.green('\nFile transfer completed'));
+      if (debugDir && deduplicationResult.duplicateSets.size > 0) {
+        console.log(chalk.yellow(`Debug mode: All files in duplicate sets have been copied to ${debugDir} for verification.`));
+      }
   }
 
   static isImageFile(filePath: string): boolean {
