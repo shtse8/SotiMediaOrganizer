@@ -1,5 +1,5 @@
 import { ExifTool } from 'exiftool-vendored';
-import type { FileInfo, DuplicateSet, DeduplicationResult, Stats } from './types';
+import type { FileInfo, DuplicateSet, DeduplicationResult, Stats, GatherFileInfoResult } from './types';
 import { LSH } from './LSH';
 import { VPTree } from './VPTree';
 import { mkdir, copyFile, rename, unlink } from 'fs/promises';
@@ -113,10 +113,11 @@ export class MediaOrganizer {
     return ' ';                         // Empty
   }
   
-  async gatherFileInfo(files: string[], resolution: number, frameCount: number, concurrency: number = 10): Promise<Map<string, FileInfo>> {
+  async gatherFileInfo(files: string[], resolution: number, frameCount: number, concurrency: number = 10): Promise<GatherFileInfoResult> {
     const fileInfoMap = new Map<string, FileInfo>();
     const formatStats = new Map<string, Stats>();
     const semaphore = new Semaphore(concurrency);
+    const errorFiles: string[] = [];
 
     const multibar = new cliProgress.MultiBar({
       clearOnComplete: false,
@@ -219,6 +220,7 @@ export class MediaOrganizer {
         } catch (error) {
           stats.processedCount++;
           stats.errorCount++;
+          errorFiles.push(file);
           bar.update(stats.processedCount, stats);
   
           // if (multibar.log) {
@@ -232,7 +234,7 @@ export class MediaOrganizer {
   
     multibar.stop();
   
-    return fileInfoMap;
+    return { fileInfoMap, errorFiles };
   }
   
   async deduplicateFiles(
@@ -277,13 +279,13 @@ export class MediaOrganizer {
         this.deduplicateFileType(videoFiles, similarity, callback)
     ]);
 
-    spinner.succeed();
+    spinner.succeed(`Deduplication completed: ${totalDuplicateSetsCount} duplicate sets, ${totalDuplicatesCount} duplicates found.`);
+
 
     // Combine results
     return {
       uniqueFiles: new Map([...imageResult.uniqueFiles, ...videoResult.uniqueFiles]),
       duplicateSets: new Map([...imageResult.duplicateSets, ...videoResult.duplicateSets]),
-      errorFiles: [...imageResult.errorFiles, ...videoResult.errorFiles]
     };
   }
 
@@ -295,19 +297,17 @@ export class MediaOrganizer {
     // Process each bucket
     const uniqueFiles = new Map<string, FileInfo>();
     const duplicateSets = new Map<string, DuplicateSet>();
-    const errorFiles: string[] = [];
+    const processedFiles = new Set<string>();
 
     // Group files by hash length
     const filesByHashLength = new Map<number, { hash: string, path: string }[]>();
     for (const [filePath, fileInfo] of fileInfoMap) {
         if (fileInfo.perceptualHash) {
-        const hashLength = fileInfo.perceptualHash.length;
-        if (!filesByHashLength.has(hashLength)) {
-            filesByHashLength.set(hashLength, []);
-        }
-        filesByHashLength.get(hashLength)!.push({ hash: fileInfo.perceptualHash, path: filePath });
-        } else {
-        errorFiles.push(filePath);
+            const hashLength = fileInfo.perceptualHash.length;
+            if (!filesByHashLength.has(hashLength)) {
+                filesByHashLength.set(hashLength, []);
+            }
+            filesByHashLength.get(hashLength)!.push({ hash: fileInfo.perceptualHash, path: filePath });
         }
     }
 
@@ -333,7 +333,11 @@ export class MediaOrganizer {
 
             for (const file of bucketFiles) {
                 const fileInfo = fileInfoMap.get(file.path)!;
-                if (uniqueFiles.has(fileInfo.hash) || duplicateSets.has(fileInfo.hash)) continue;
+                
+                // Check if this file has already been processed
+                if (processedFiles.has(file.path)) {
+                    continue;
+                }
 
                 const neighbors = vpTree.nearestNeighbors(file.hash, bucket.length);
                 let duplicateSet: DuplicateSet | undefined;
@@ -346,10 +350,8 @@ export class MediaOrganizer {
                         if (!duplicateSet) {
                             duplicateSet = { bestFile: fileInfo, duplicates: new Set() };
                         }
-                        const isNewBest = this.handleDuplicate(neighborInfo, duplicateSet);
-                        if (!isNewBest) {
-                            duplicateSet.duplicates.add(neighbor.path);
-                        }
+                        this.handleDuplicate(neighborInfo, duplicateSet);
+                        processedFiles.add(neighbor.path);
                     } else {
                         break;
                     }
@@ -357,15 +359,17 @@ export class MediaOrganizer {
 
                 if (duplicateSet) {
                     duplicateSets.set(duplicateSet.bestFile.hash, duplicateSet);
+                    processedFiles.add(duplicateSet.bestFile.path);
                     duplicateCallback(duplicateSet);
                 } else {
                     uniqueFiles.set(fileInfo.hash, fileInfo);
+                    processedFiles.add(file.path);
                 }
             }
         }
     }
 
-    return { uniqueFiles, duplicateSets, errorFiles };
+    return { uniqueFiles, duplicateSets };
   }
 
   private hammingDistance(str1: string, str2: string): number {
@@ -406,6 +410,7 @@ export class MediaOrganizer {
   }
 
   async transferFiles(
+    gatherFileInfoResult: GatherFileInfoResult,
     deduplicationResult: DeduplicationResult,
     targetDir: string,
     duplicateDir: string | undefined,
@@ -478,9 +483,9 @@ export class MediaOrganizer {
       }
     
       // Handle error files
-      if (errorDir && deduplicationResult.errorFiles.length > 0) {
-        const errorBar = multibar.create(deduplicationResult.errorFiles.length, 0, { phase: 'Error   ' });
-        for (const errorFilePath of deduplicationResult.errorFiles) {
+      if (errorDir && gatherFileInfoResult.errorFiles.length > 0) {
+        const errorBar = multibar.create(gatherFileInfoResult.errorFiles.length, 0, { phase: 'Error   ' });
+        for (const errorFilePath of gatherFileInfoResult.errorFiles) {
           const targetPath = join(errorDir, basename(errorFilePath));
           await this.transferOrCopyFile(errorFilePath, targetPath, !shouldMove);
           errorBar.increment();

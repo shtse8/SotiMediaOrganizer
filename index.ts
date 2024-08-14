@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import type { ProgramOptions, DeduplicationResult } from './types';
+import type { ProgramOptions, DeduplicationResult, GatherFileInfoResult } from './types';
 import { MediaOrganizer } from './MediaOrganizer';
 
 async function main() {
@@ -33,7 +33,7 @@ async function main() {
 
     // Stage 2: Gathering Information
     console.log(chalk.blue('\nStage 2: Gathering file information...'));
-    const fileInfoMap = await organizer.gatherFileInfo(
+    const gatherFileInfoResult = await organizer.gatherFileInfo(
       discoveredFiles, 
       parseInt(options.resolution, 10), 
       parseInt(options.frameCount, 10)
@@ -42,13 +42,14 @@ async function main() {
     // Stage 3: Deduplication
     console.log(chalk.blue('\nStage 3: Deduplicating files...'));
     const deduplicationResult = await organizer.deduplicateFiles(
-      fileInfoMap, 
+      gatherFileInfoResult.fileInfoMap, 
       parseFloat(options.similarity)
     );
 
     // Stage 4: File Transfer
     console.log(chalk.blue('\nStage 4: Transferring files...'));
     await organizer.transferFiles(
+      gatherFileInfoResult,
       deduplicationResult,
       options.target,
       options.duplicate,
@@ -59,7 +60,7 @@ async function main() {
     );
 
     console.log(chalk.green('\nMedia organization completed'));
-    printResults(deduplicationResult, discoveredFiles.length);
+    printResults(gatherFileInfoResult, deduplicationResult, discoveredFiles.length);
 
   } catch (error) {
     console.error(chalk.red('An unexpected error occurred:'), error);
@@ -68,12 +69,16 @@ async function main() {
   }
 }
 
-function printResults(result: DeduplicationResult, totalFiles: number) {
+function printResults(
+  gatherFileInfoResult: GatherFileInfoResult,
+  deduplicationResult: DeduplicationResult,
+  totalFiles: number
+) {
   console.log(chalk.cyan(`Total files discovered: ${totalFiles}`));
-  console.log(chalk.cyan(`Unique files: ${result.uniqueFiles.size}`));
-  console.log(chalk.yellow(`Duplicate sets: ${result.duplicateSets.size}`));
-  console.log(chalk.yellow(`Total duplicates: ${Array.from(result.duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)}`));
-  console.log(chalk.red(`Files with errors: ${result.errorFiles.length}`));
+  console.log(chalk.cyan(`Unique files: ${deduplicationResult.uniqueFiles.size}`));
+  console.log(chalk.yellow(`Duplicate sets: ${deduplicationResult.duplicateSets.size}`));
+  console.log(chalk.yellow(`Total duplicates: ${Array.from(deduplicationResult.duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)}`));
+  console.log(chalk.red(`Files with errors: ${gatherFileInfoResult.errorFiles.length}`));
 }
 
 main().catch((error) => {

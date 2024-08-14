@@ -37,9 +37,13 @@
     withCameraCount: number;
     errorCount: number;
   }
+
+  export interface GatherFileInfoResult {
+    fileInfoMap: Map<string, FileInfo>;
+    errorFiles: string[];
+  }
   
   export interface DeduplicationResult {
     uniqueFiles: Map<string, FileInfo>;
     duplicateSets: Map<string, DuplicateSet>;
-    errorFiles: string[];
   }
