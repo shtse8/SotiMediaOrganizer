@@ -121,7 +121,7 @@ export class MediaOrganizer {
     const multibar = new cliProgress.MultiBar({
       clearOnComplete: false,
       stopOnComplete: true,
-      hideCursor: null,
+      hideCursor: true,
       etaBuffer: 1000,
       barsize: 15,
       etaAsynchronousUpdate: true,
