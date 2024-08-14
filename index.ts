@@ -53,7 +53,7 @@ interface ProgramOptions {
   move: boolean;
   resolution: string;
   frameCount: string;
-  hamming: string;
+  similarity: string;
   format: string;
 }
 
@@ -81,16 +81,34 @@ class LSH {
   private bandSize: number;
   private numBands: number;
 
-  constructor(hashSize: number = 64) {
-    if (hashSize <= 0) {
+  constructor(hashLength: number, similarityThreshold: number) {
+    if (hashLength <= 0) {
       throw new Error('Hash size must be a positive integer');
     }
     
-    this.bandSize = Math.ceil(Math.sqrt(hashSize));
-    this.numBands = Math.ceil(hashSize / this.bandSize);
+    [this.numBands, this.bandSize] = this.calculateBandsAndRows(hashLength, similarityThreshold);
     this.bands = Array.from({ length: this.numBands }, () => new Map<string, Set<string>>());
   }
 
+  private calculateBandsAndRows(hashLength: number, similarityThreshold: number): [number, number] {
+    let bestBands = 0;
+    let bestRows = 0;
+    let minDiff = Infinity;
+
+    for (let b = 1; b <= hashLength; b++) {
+        if (hashLength % b !== 0) continue;
+        const r = hashLength / b;
+        const calculatedSimilarity = Math.pow(1 / b, 1 / r);
+        const diff = Math.abs(calculatedSimilarity - similarityThreshold);
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestBands = b;
+            bestRows = r;
+        }
+    }
+
+    return [bestBands, bestRows];
+}
   add(hash: string, identifier: string) {
     for (let i = 0; i < this.numBands; i++) {
       const bandHash = hash.slice(i * this.bandSize, (i + 1) * this.bandSize);
@@ -128,7 +146,6 @@ class LSH {
     return candidates;
   }
 }
-
 
 // Stage 1: File Discovery
 async function discoverFiles(sourceDirs: string[], concurrency: number = 10): Promise<string[]> {
@@ -182,7 +199,7 @@ async function deduplicateFiles(
   files: string[],
   resolution: number,
   frameCount: number,
-  hammingThreshold: number,
+  similarity: number,
   concurrency: number = 3
 ): Promise<DeduplicationResult> {
   const uniqueFiles = new Map<string, FileInfo>();
@@ -200,9 +217,9 @@ async function deduplicateFiles(
     duplicateCount: 0,
     errorCount: 0
   };
-  const overallStartTime = Date.now();
   const hashSize = resolution * resolution;
-  const lsh = new LSH(hashSize);
+  const lsh = new LSH(hashSize, similarity);
+  const hammingThreshold = Math.floor(hashSize * (1 - similarity));
 
   // Count the number of files for each format
   for (const file of files) {
@@ -975,7 +992,7 @@ async function main() {
     .option('-m, --move', 'Move files instead of copying them', false)
     .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '8')
     .option('--frame-count <number>', 'Number of frames to extract from videos for perceptual hashing (default: 5)', '5')
-    .option('-h, --hamming <number>', 'Hamming distance threshold (default: 10)', '10')
+    .option('-s, --similarity <number>', 'Similarity threshold for perceptual hashing (default: 0.995)', '0.995')
     .option('-f, --format <string>', 'Format for target directory (default: {D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT})', '{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}')
     .addHelpText('after', `
 Format string placeholders:
@@ -1040,9 +1057,9 @@ Example format strings:
     throw new Error('Frame count must be a positive number');
   }
 
-  const hammingThreshold = parseInt(options.hamming, 10);
-  if (hammingThreshold < 0) {
-    throw new Error('Hamming threshold must be a non-negative number');
+  const similarity = parseFloat(options.similarity);
+  if (similarity <= 0 || similarity >= 1) {
+    throw new Error('Similarity threshold must be a number between 0 and 1');
   }
 
   // Stage 1: File Discovery
@@ -1051,7 +1068,7 @@ Example format strings:
 
   // Stage 2: Deduplication
   console.log(chalk.blue('\nStage 2: Deduplicating files...'));
-  const { uniqueFiles, duplicateSets, errorFiles } = await deduplicateFiles(discoveredFiles, resolution, frameCount, hammingThreshold, workerCount);
+  const { uniqueFiles, duplicateSets, errorFiles } = await deduplicateFiles(discoveredFiles, resolution, frameCount, similarity, workerCount);
 
   // Stage 3: File Transfer
   console.log(chalk.blue('\nStage 3: Transferring files...'));
