@@ -24,7 +24,8 @@
     "node-addon-api": "^8.1.0",
     "node-gyp": "^10.2.0",
     "ora": "^8.0.1",
-    "sharp": "^0.33.4"
+    "sharp": "^0.33.4",
+    "workerpool": "^9.1.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
