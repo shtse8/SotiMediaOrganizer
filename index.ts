@@ -988,7 +988,7 @@ async function main() {
     .option('-e, --error <path>', 'Directory for files that couldn\'t be processed')
     .option('-d, --duplicate <path>', 'Directory for duplicate files')
     .option('--debug <path>', 'Debug directory for storing all files in duplicate sets')
-    .option('-w, --workers <number>', 'Number of concurrent workers (default: number of CPU cores)', os.cpus().length.toString())
+    .option('-w, --workers <number>', 'Number of concurrent workers (default: 1/2 of CPU cores)', Math.floor(os.cpus().length / 2).toString())
     .option('-m, --move', 'Move files instead of copying them', false)
     .option('-r, --resolution <number>', 'Resolution for perceptual hashing (default: 64)', '8')
     .option('--frame-count <number>', 'Number of frames to extract from videos for perceptual hashing (default: 5)', '5')
