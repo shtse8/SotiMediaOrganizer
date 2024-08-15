@@ -1,7 +1,7 @@
 import { ExifDate, ExifDateTime, ExifTool, type Tags } from 'exiftool-vendored';
 import type { FileInfo, DuplicateSet, DeduplicationResult, Stats, GatherFileInfoResult } from './types';
 import { LSH } from './LSH';
-import { VPTree } from './VPTree';
+import { VPTree, type SearchResult } from './VPTree';
 import { mkdir, copyFile, rename, unlink } from 'fs/promises';
 import { join, basename, dirname, extname, parse } from 'path';
 import { existsSync } from 'fs';
@@ -280,119 +280,41 @@ export class MediaOrganizer {
     similarity: number,
     fileType: FileType
   ): DeduplicationResult {
-    
     const spinner = new Spinner().start(`Deduplicating ${fileInfoMap.size} files...`, {
         withPrefix: fileType === FileType.Image ? 'Image ' : 'Video ',
     });
 
-    // Process each bucket
     const uniqueFiles = new Map<string, FileInfo>();
     const duplicateSets = new Map<Buffer, DuplicateSet>();
-    const processedFiles = new Set<string>();
     const hashLength = resolution * resolution * frameCount;
-    const lsh = new LSH(hashLength, similarity);
     const hammingThreshold = Math.floor(hashLength * (1 - similarity));
 
-     // Step 1: Group files by file hash
-    const fileHashGroups = new Map<Buffer, FileInfo[]>();
-    for (const [filePath, fileInfo] of fileInfoMap) {
-        if (!fileHashGroups.has(fileInfo.hash)) {
-        fileHashGroups.set(fileInfo.hash, []);
-        }
-        fileHashGroups.get(fileInfo.hash)!.push(fileInfo);
-    }
+    // Create VPTree
+    const points = Array.from(fileInfoMap.entries()).map(([path, fileInfo]) => ({
+      hash: fileInfo.perceptualHash!,
+      identifier: path,
+    }));
+    const vpTree = new VPTree(points, this.hammingDistance.bind(this));
 
-    // Step 2: Process exact duplicates (same file hash)
-    for (const [fileHash, group] of fileHashGroups) {
-      if (group.length > 1) {
-        // Found exact duplicates
-        const bestFile = this.selectBestFile(group);
-        const duplicateSet: DuplicateSet = {
-            bestFile: bestFile,
-            duplicates: new Set(group.filter(f => f !== bestFile).map(f => f.path))
-        };
-        duplicateSets.set(fileHash, duplicateSet);
-        for (const file of group) {
-            processedFiles.add(file.path);
-        }
-        spinner.text = `Found ${duplicateSets.size} duplicate sets, ${Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)} duplicates...`;
-      } else if (group[0].perceptualHash) {
-        // Single file with perceptual hash, add to LSH for near-duplicate detection
-        lsh.add(group[0].perceptualHash, group[0].path);
+    // Perform DBSCAN clustering
+    const clusters = this.dbscan(vpTree, fileInfoMap, hammingThreshold);
+
+    // Process clusters
+    for (const cluster of clusters) {
+      if (cluster.length === 1) {
+        // Unique file
+        const fileInfo = fileInfoMap.get(cluster[0])!;
+        uniqueFiles.set(cluster[0], fileInfo);
       } else {
-      // Single file without perceptual hash, mark as unique
-        uniqueFiles.set(group[0].path, group[0]);
-        processedFiles.add(group[0].path);
+        // Duplicate set
+        const bestFile = this.selectBestFile(cluster.map(path => fileInfoMap.get(path)!));
+        const duplicateSet: DuplicateSet = {
+          bestFile: bestFile,
+          duplicates: new Set(cluster.filter(path => path !== bestFile.path)),
+        };
+        duplicateSets.set(bestFile.hash, duplicateSet);
       }
     }
-
-    // Step 3: Process near-duplicates using LSH and VPTree
-    const lshBuckets = lsh.getAllBuckets();
-
-    for (const bucket of lshBuckets) {
-      const bucketEntries = bucket.map(path => ({
-        hash: fileInfoMap.get(path)!.perceptualHash!,
-        identifier: path
-      }));
-      const vpTree = new VPTree(bucketEntries, this.hammingDistance.bind(this));  
-      for (const filePath of bucket) {
-        if (processedFiles.has(filePath)) continue;
-  
-        const fileInfo = fileInfoMap.get(filePath)!;
-        let duplicateSet: DuplicateSet | undefined;
-  
-        const nearestNeighbors = vpTree.nearestNeighbors(fileInfo.perceptualHash!, {
-            k: Infinity,
-            distance: hammingThreshold,
-        });
-
-        for (const neighbor of nearestNeighbors) {
-            if (neighbor.identifier === filePath) continue;
-            if (!duplicateSet) {
-                duplicateSet = { bestFile: fileInfo, duplicates: new Set() };
-            }
-            this.handleDuplicate(fileInfoMap.get(neighbor.identifier)!, duplicateSet);
-            processedFiles.add(neighbor.identifier);
-        }
-  
-        if (duplicateSet) {
-            duplicateSets.set(duplicateSet.bestFile.hash, duplicateSet);
-            processedFiles.add(filePath);
-            spinner.text = `Found ${duplicateSets.size} duplicate sets, ${Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)} duplicates...`;
-        } else {
-            uniqueFiles.set(filePath, fileInfo);
-            processedFiles.add(filePath);
-        }
-      }
-    }
-
-    // Handle any remaining unprocessed files
-    for (const [filePath, fileInfo] of fileInfoMap) {
-        if (!processedFiles.has(filePath)) {
-        uniqueFiles.set(filePath, fileInfo);
-        processedFiles.add(filePath);
-        }
-    }
-
-    console.log(`Deduplication completed:`);
-    console.log(`- Total files processed: ${processedFiles.size}`);
-    console.log(`- Unique files: ${uniqueFiles.size}`);
-    console.log(`- Duplicate sets: ${duplicateSets.size}`);
-    console.log(`- Total duplicates: ${Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)}`);
-
-    // Final check
-    const totalProcessed = uniqueFiles.size + duplicateSets.size + 
-        Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0);
-    
-    if (totalProcessed !== fileInfoMap.size) {
-        console.error(`Mismatch in file count: Processed ${totalProcessed}, but started with ${fileInfoMap.size}`);
-        const unprocessedFiles = new Set(fileInfoMap.keys());
-        for (const processed of processedFiles) {
-        unprocessedFiles.delete(processed);
-        }
-        console.error(`Unprocessed files: ${Array.from(unprocessedFiles).join(', ')}`);
-    }
-
 
     spinner.succeed(`Deduplication completed: Found ${duplicateSets.size} duplicate sets, ${Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)} duplicates`);
 
@@ -405,7 +327,60 @@ export class MediaOrganizer {
         distance += this.popcount(hash1[i] ^ hash2[i]);
     }
     return distance;
-}
+  }
+
+  private dbscan(vpTree: VPTree, fileInfoMap: Map<string, FileInfo>, eps: number, minPts: number = 2): string[][] {
+    const visited = new Set<string>();
+    const clusters: string[][] = [];
+
+    for (const [path, fileInfo] of fileInfoMap) {
+      if (visited.has(path)) continue;
+      visited.add(path);
+
+      const neighbors = vpTree.nearestNeighbors(fileInfo.perceptualHash!, { distance: eps });
+      if (neighbors.length < minPts) {
+        // Noise point
+        clusters.push([path]);
+      } else {
+        // Core point, start a new cluster
+        const cluster = this.expandCluster(path, neighbors, vpTree, fileInfoMap, visited, eps, minPts);
+        clusters.push(cluster);
+      }
+    }
+
+    return clusters;
+  }
+
+  private expandCluster(
+    startPath: string,
+    neighbors: SearchResult[],
+    vpTree: VPTree,
+    fileInfoMap: Map<string, FileInfo>,
+    visited: Set<string>,
+    eps: number,
+    minPts: number
+  ): string[] {
+    const cluster: string[] = [startPath];
+    const queue = neighbors.map(n => n.identifier);
+
+    while (queue.length > 0) {
+      const currentPath = queue.shift()!;
+      if (!visited.has(currentPath)) {
+        visited.add(currentPath);
+        const currentNeighbors = vpTree.nearestNeighbors(fileInfoMap.get(currentPath)!.perceptualHash!, { distance: eps });
+        
+        if (currentNeighbors.length >= minPts) {
+          queue.push(...currentNeighbors.map(n => n.identifier).filter(p => !visited.has(p)));
+        }
+      }
+
+      if (!cluster.includes(currentPath)) {
+        cluster.push(currentPath);
+      }
+    }
+
+    return cluster;
+  }
 
   private popcount(x: number): number {
     // Counts the number of set bits (1s) in a binary representation of the number

@@ -109,7 +109,7 @@ interface SearchOptions {
     distance?: number;
 }
 
-interface SearchResult {
+export interface SearchResult {
     identifier: string;
     distance: number;
 }
