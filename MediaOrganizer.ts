@@ -1,4 +1,4 @@
-import { ExifTool } from 'exiftool-vendored';
+import { ExifDate, ExifDateTime, exiftool, ExifTool, type Tags } from 'exiftool-vendored';
 import type { FileInfo, DuplicateSet, DeduplicationResult, Stats, GatherFileInfoResult } from './types';
 import { LSH } from './LSH';
 import { VPTree } from './VPTree';
@@ -11,13 +11,17 @@ import { MultiBar, Presets } from 'cli-progress';
 import ora from 'ora';
 import { Semaphore } from 'async-mutex';
 import cliProgress from 'cli-progress';
-import path from 'path';
 import { readdir } from 'fs/promises';
-import { getFileInfo } from './fileProcessing';
+import { stat } from 'fs/promises';
+import { createHash, type Hash } from 'crypto';
+import { createReadStream } from 'fs';
+import sharp from 'sharp';
+import ffmpeg from 'fluent-ffmpeg';
+import path from 'path';
+import { Spinner } from '@topcli/spinner';
+
 
 export class MediaOrganizer {
-  private exiftool: ExifTool;
-
   static readonly SUPPORTED_EXTENSIONS = {
     images: ['jpg', 'jpeg', 'jpe', 'jif', 'jfif', 'jfi', 'jp2', 'j2c', 'jpf', 'jpx', 'jpm', 'mj2', 
              'png', 'gif', 'webp', 'tif', 'tiff', 'bmp', 'dib', 'heic', 'heif', 'avif'],
@@ -29,10 +33,6 @@ export class MediaOrganizer {
 
   static readonly ALL_SUPPORTED_EXTENSIONS = Object.values(MediaOrganizer.SUPPORTED_EXTENSIONS).flat();
 
-  constructor() {
-    this.exiftool = new ExifTool();
-  }
-
   async discoverFiles(sourceDirs: string[], concurrency: number = 10): Promise<string[]> {
     const allFiles: string[] = [];
     let dirCount = 0;
@@ -40,7 +40,7 @@ export class MediaOrganizer {
     const startTime = Date.now();
     const semaphore = new Semaphore(concurrency);
     const supportedExtensions = new Set(MediaOrganizer.ALL_SUPPORTED_EXTENSIONS);
-    const spinner = ora('Discovering files...').start();
+    const spinner = new Spinner().start('Discovering files...');
   
     async function scanDirectory(dirPath: string): Promise<void> {
       try {
@@ -203,11 +203,11 @@ export class MediaOrganizer {
         ...stats,
       });
   
-      await Promise.all(formatFiles.map(async (file) => {
+      for (const file of formatFiles) {
         const [_, release] = await semaphore.acquire();
   
         try {
-          const fileInfo = await getFileInfo(file, resolution, frameCount);
+          const fileInfo = await this.getFileInfo(file, resolution, frameCount);
           fileInfoMap.set(file, fileInfo);
   
   
@@ -229,10 +229,13 @@ export class MediaOrganizer {
         } finally {
           release();
         }
-      }));
+      }
     }
   
+    await semaphore.waitForUnlock(concurrency);
+    
     multibar.stop();
+
   
     return { fileInfoMap, errorFiles };
   }
@@ -259,7 +262,8 @@ export class MediaOrganizer {
         duplicateSet: DuplicateSet;
     }[]>[];
     
-    const spinner = ora('Discovering files...').start();
+    
+    const spinner = new Spinner().start('Deduplicating files...');
 
     const callback = (duplicateSet: DuplicateSet) => { 
         totalDuplicateSetsCount++;
@@ -281,7 +285,6 @@ export class MediaOrganizer {
 
     spinner.succeed(`Deduplication completed: ${totalDuplicateSetsCount} duplicate sets, ${totalDuplicatesCount} duplicates found.`);
 
-
     // Combine results
     return {
       uniqueFiles: new Map([...imageResult.uniqueFiles, ...videoResult.uniqueFiles]),
@@ -289,11 +292,11 @@ export class MediaOrganizer {
     };
   }
 
-  private async deduplicateFileType(
+  private deduplicateFileType(
     fileInfoMap: Map<string, FileInfo>,
     similarity: number,
     duplicateCallback: (duplicateSet: DuplicateSet) => void
-  ): Promise<DeduplicationResult> {
+  ): DeduplicationResult {
     // Process each bucket
     const uniqueFiles = new Map<string, FileInfo>();
     const duplicateSets = new Map<string, DuplicateSet>();
@@ -695,6 +698,173 @@ export class MediaOrganizer {
   }
 
   async cleanup() {
-    await this.exiftool.end();
+    await exiftool.closeChildProcesses();
+    await exiftool.end();
+  }
+
+  
+  private async  getFileInfo(filePath: string, resolution: number, frameCount: number): Promise<FileInfo> {
+    const [fileStat, hash, metadata, perceptualHash] = await Promise.all([
+      stat(filePath),
+      this.calculateFileHash(filePath),
+      this.getMetadata(filePath),
+      this.isImageFile(filePath) 
+        ? this.getImagePerceptualHash(filePath, resolution)
+        : this.isVideoFile(filePath)
+        ? this.getVideoPerceptualHash(filePath, frameCount, resolution)
+        : Promise.resolve(undefined)
+    ]);
+  
+    const imageDate = this.toDate(metadata.DateTimeOriginal) ?? this.toDate(metadata.MediaCreateDate);
+  
+    const fileInfo: FileInfo = {
+      path: filePath,
+      size: fileStat.size,
+      hash,
+      imageDate: imageDate,
+      fileDate: fileStat.mtime,
+      perceptualHash: perceptualHash,
+      quality: (metadata.ImageHeight ?? 0) * (metadata.ImageWidth ?? 0),
+      geoLocation: metadata.GPSLatitude && metadata.GPSLongitude ? `${metadata.GPSLatitude},${metadata.GPSLongitude}` : undefined,
+      cameraModel: metadata.Model
+    };
+  
+    return fileInfo;
+  }
+  
+  private async calculateFileHash(filePath: string, maxChunkSize = 1024 * 1024): Promise<string> {
+    const hash = createHash('md5');
+    const fileSize = (await stat(filePath)).size;
+  
+    if (fileSize > maxChunkSize) {
+      const chunkSize = maxChunkSize / 2;
+      await this.hashFile(filePath, hash, 0, chunkSize);
+      await this.hashFile(filePath, hash, fileSize - chunkSize, chunkSize);
+    } else {
+      await this.hashFile(filePath, hash);
+    }
+  
+    return hash.digest('hex');
+  }
+  
+  private hashFile(filePath: string, hash: Hash, start: number = 0, size?: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const stream = createReadStream(filePath, { start, end: size ? start + size - 1 : undefined});
+      stream.on('data', (chunk: Buffer) => hash.update(chunk));
+      stream.on('end', resolve);
+      stream.on('error', reject);
+    });
+  }
+  
+  private getMetadata(path: string): Promise<Tags> {
+    return exiftool.read(path);
+  }
+  
+  private async getImagePerceptualHash(filePath: string, resolution: number): Promise<string> {
+    const image = sharp(filePath, { failOnError: false });
+  
+    try {
+      const perceptualHashData = await image
+          .resize(resolution, resolution, { fit: 'fill' })
+          .greyscale()
+          .raw()
+          .toBuffer({ resolveWithObject: false });
+  
+      return this.getPerceptualHash(perceptualHashData, resolution);
+    } finally {
+      image.destroy();
+    }
+  }
+  
+  private getVideoPerceptualHash(filePath: string, numFrames: number = 10, resolution: number = 8): Promise<string> {
+    return new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(filePath, (err, metadata) => {
+        if (err) {
+          return reject(err);
+        }
+  
+        const duration = metadata.format.duration;
+        if (!duration) {
+          return reject(new Error('Could not determine video duration.'));
+        }
+  
+        const interval = Math.max(1, duration / (numFrames + 1));
+        const frameBuffers: Buffer[] = [];
+  
+        ffmpeg(filePath)
+          .on('error', (err) => {
+            return reject(err);
+          })
+          .on('end', async () => {
+            try {
+              if (frameBuffers.length <= 0) {
+                return reject(new Error('No frames extracted from video.'));
+              }
+              const combinedHash = await this.combineFrameHashes(frameBuffers, resolution);
+              resolve(combinedHash);
+            } catch (error) {
+              reject(error);
+            }
+          })
+          .videoFilters(
+            `select='(isnan(prev_selected_t)*gte(t\\,${interval}))+gte(t-prev_selected_t\\,${interval})',scale=${resolution}:${resolution},format=gray`
+          )
+          .outputOptions('-vsync', 'vfr', '-vcodec', 'rawvideo', '-f', 'rawvideo', '-pix_fmt', 'gray')
+          .pipe()
+          .on('data', (chunk) => {
+            frameBuffers.push(chunk);
+          });
+      });
+    });
+  }
+  
+  private async combineFrameHashes(frameBuffers: Buffer[], resolution: number): Promise<string> {
+    const pixelCount = resolution * resolution;
+    const frameCount = frameBuffers.length;
+    const averageBuffer = Buffer.alloc(pixelCount);
+  
+    // Calculate average pixel values across all frames
+    for (let i = 0; i < pixelCount; i++) {
+      let sum = 0;
+      for (const frameBuffer of frameBuffers) {
+        sum += frameBuffer[i];
+      }
+      averageBuffer[i] = Math.round(sum / frameCount);
+    }
+  
+    // Calculate perceptual hash from the average frame
+    return this.getPerceptualHash(averageBuffer, resolution);
+  }
+  
+  private getPerceptualHash(imageBuffer: Buffer, resolution: number): string {
+    const pixelCount = resolution * resolution;
+    const totalBrightness = imageBuffer.reduce((sum, pixel) => sum + pixel, 0);
+    const averageBrightness = totalBrightness / pixelCount;
+  
+    let hash = '';
+    for (let i = 0; i < pixelCount; i++) {
+      hash += imageBuffer[i] < averageBrightness ? '0' : '1';
+    }
+  
+    return hash;
+  }
+  
+  private toDate(value: string | ExifDateTime | ExifDate | undefined): Date | undefined {
+    if (!value) return undefined;
+    if (typeof value === 'string') return new Date(value);
+    if (value instanceof ExifDateTime || value instanceof ExifDate) {
+      return value.toDate();
+    }
+    return undefined;
+  }
+  
+  private isImageFile(filePath: string): boolean {
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    return MediaOrganizer.SUPPORTED_EXTENSIONS.images.includes(ext) || MediaOrganizer.SUPPORTED_EXTENSIONS.rawImages.includes(ext);
+  }
+  
+  private isVideoFile(filePath: string): boolean {
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    return MediaOrganizer.SUPPORTED_EXTENSIONS.videos.includes(ext);
   }
 }

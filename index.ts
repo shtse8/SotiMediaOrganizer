@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import type { ProgramOptions, DeduplicationResult, GatherFileInfoResult } from './types';
 import { MediaOrganizer } from './MediaOrganizer';
+import { Spinner } from "@topcli/spinner";
 
 async function main() {
   const program = new Command();
@@ -27,6 +28,8 @@ async function main() {
   const organizer = new MediaOrganizer();
 
   try {
+    
+
     // Stage 1: File Discovery
     console.log(chalk.blue('Stage 1: Discovering files...'));
     const discoveredFiles = await organizer.discoverFiles(options.source);
