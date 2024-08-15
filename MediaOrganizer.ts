@@ -18,6 +18,7 @@ import sharp from 'sharp';
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import { Spinner } from '@topcli/spinner';
+import { open, RootDatabase } from 'lmdb';
 
 enum FileType {
     Image,
@@ -39,6 +40,14 @@ export class MediaOrganizer {
   ]);
 
   private exiftool: ExifTool = new ExifTool();
+  private db: RootDatabase;
+
+  constructor(dbPath: string = '.mediadb') {
+    this.db = open({
+      path: dbPath,
+      compression: true,
+    });
+  }
 
   async discoverFiles(sourceDirs: string[], concurrency: number = 10): Promise<string[]> {
     const allFiles: string[] = [];
@@ -46,7 +55,6 @@ export class MediaOrganizer {
     let fileCount = 0;
     const startTime = Date.now();
     const semaphore = new Semaphore(concurrency);
-    const supportedExtensions = new Set(MediaOrganizer.ALL_SUPPORTED_EXTENSIONS);
     const spinner = new Spinner().start('Discovering files...');
   
     async function scanDirectory(dirPath: string): Promise<void> {
@@ -156,7 +164,7 @@ export class MediaOrganizer {
           timeInfo = `Time: ${chalk.yellow(duration.padStart(8))}`;
         }
     
-        return `${chalk.white(payload.format.padEnd(6))} ${bar} ${chalk.green(percentage.padStart(6))}% | ${chalk.cyan(payload.processedCount.toString().padStart(5))}/${chalk.cyan(payload.totalCount.toString().padStart(5))} | ${timeInfo} | ${chalk.magenta(payload.withImageDateCount.toString().padStart(5))} w/date | ${chalk.magenta(payload.withCameraCount.toString().padStart(5))} w/camera | ${chalk.magenta(payload.withGeoCount.toString().padStart(5))} w/geo | ${chalk.red(payload.errorCount.toString().padStart(5))} errors`;
+        return `${chalk.white(payload.format.padEnd(6))} ${bar} ${chalk.green(percentage.padStart(6))}% | ${chalk.cyan(payload.processedCount.toString().padStart(5))}/${chalk.cyan(payload.totalCount.toString().padStart(5))} | ${timeInfo} | ${chalk.magenta(payload.withImageDateCount.toString().padStart(5))} w/date | ${chalk.magenta(payload.withCameraCount.toString().padStart(5))} w/camera | ${chalk.magenta(payload.withGeoCount.toString().padStart(5))} w/geo | ${chalk.red(payload.errorCount.toString().padStart(5))} errors | ${chalk.yellow(payload.cachedCount.toString().padStart(5))} cached`;
       }
     }, cliProgress.Presets.shades_classic);
   
@@ -182,7 +190,8 @@ export class MediaOrganizer {
         withGeoCount: 0,
         withImageDateCount: 0,
         withCameraCount: 0,
-        errorCount: 0
+        errorCount: 0,
+        cachedCount: 0,
       };
       formatStats.set(format, stats);
   
@@ -210,7 +219,14 @@ export class MediaOrganizer {
         await semaphore.waitForUnlock();
         semaphore.runExclusive(async () => {
             try {
-            const fileInfo = await this.getFileInfo(file, resolution, frameCount);
+            let fileInfo: FileInfo | undefined = await this.db.get(file) as FileInfo | undefined;
+            
+            if (fileInfo) {
+                stats.cachedCount++;
+            } else {
+                fileInfo = await this.getFileInfo(file, resolution, frameCount);
+                await this.db.put(file, fileInfo);
+            }
             fileInfoMap.set(file, fileInfo);
     
     

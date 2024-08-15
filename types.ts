@@ -36,6 +36,7 @@
     withImageDateCount: number;
     withCameraCount: number;
     errorCount: number;
+    cachedCount: number;
   }
 
   export interface GatherFileInfoResult {
