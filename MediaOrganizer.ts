@@ -8,7 +8,6 @@ import { existsSync } from 'fs';
 import crypto from 'crypto';
 import chalk from 'chalk';
 import { MultiBar, Presets } from 'cli-progress';
-import ora from 'ora';
 import { Semaphore } from 'async-mutex';
 import cliProgress from 'cli-progress';
 import { readdir } from 'fs/promises';
