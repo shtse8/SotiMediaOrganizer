@@ -346,8 +346,6 @@ export class MediaOrganizer {
             distance: hammingThreshold,
         });
 
-        console.log(nearestNeighbors);
-  
         for (const neighbor of nearestNeighbors) {
             if (neighbor.identifier === filePath) continue;
             if (!duplicateSet) {

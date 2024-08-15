@@ -9,7 +9,7 @@ export class LSH {
         }
 
         [this.numBands, this.bandSize] = this.calculateBandsAndRows(hashLength, similarityThreshold, speedImportance);
-        console.log(`Using ${this.numBands} bands with ${this.bandSize} rows each\n\n`);
+        // console.log(`Using ${this.numBands} bands with ${this.bandSize} rows each\n\n`);
         this.bands = Array.from({ length: this.numBands }, () => new Map<string, Set<string>>());
     }
 
@@ -18,7 +18,7 @@ export class LSH {
         let bestRows = hashLength;
         let bestScore = -Infinity;
 
-        console.log(`Calculating bands and rows for hash length: ${hashLength}, similarity: ${similarityThreshold}, speed importance: ${speedImportance}`);
+        // console.log(`Calculating bands and rows for hash length: ${hashLength}, similarity: ${similarityThreshold}, speed importance: ${speedImportance}`);
 
         for (let b = 1; b <= hashLength; b++) {
             if (hashLength % b !== 0) continue;
@@ -36,7 +36,7 @@ export class LSH {
                 balanceWeight * balanceScore
             ) / (1 + balanceWeight);
 
-            console.log(`Bands: ${b}, Rows: ${r}, Similarity: ${calculatedSimilarity.toFixed(4)}, Score: ${score.toFixed(4)}`);
+            // console.log(`Bands: ${b}, Rows: ${r}, Similarity: ${calculatedSimilarity.toFixed(4)}, Score: ${score.toFixed(4)}`);
 
             if (score > bestScore) {
                 bestScore = score;
@@ -45,7 +45,7 @@ export class LSH {
             }
         }
 
-        console.log(`Selected configuration: ${bestBands} bands with ${bestRows} rows each. Best score: ${bestScore.toFixed(4)}`);
+        // console.log(`Selected configuration: ${bestBands} bands with ${bestRows} rows each. Best score: ${bestScore.toFixed(4)}`);
 
         return [bestBands, bestRows];
     }
