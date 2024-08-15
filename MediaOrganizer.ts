@@ -287,14 +287,14 @@ export class MediaOrganizer {
 
     // Process each bucket
     const uniqueFiles = new Map<string, FileInfo>();
-    const duplicateSets = new Map<string, DuplicateSet>();
+    const duplicateSets = new Map<Buffer, DuplicateSet>();
     const processedFiles = new Set<string>();
     const hashLength = resolution * resolution * frameCount;
     const lsh = new LSH(hashLength, similarity);
     const hammingThreshold = Math.floor(hashLength * (1 - similarity));
 
      // Step 1: Group files by file hash
-    const fileHashGroups = new Map<string, FileInfo[]>();
+    const fileHashGroups = new Map<Buffer, FileInfo[]>();
     for (const [filePath, fileInfo] of fileInfoMap) {
         if (!fileHashGroups.has(fileInfo.hash)) {
         fileHashGroups.set(fileInfo.hash, []);
@@ -332,30 +332,29 @@ export class MediaOrganizer {
     for (const bucket of lshBuckets) {
       const bucketEntries = bucket.map(path => ({
         hash: fileInfoMap.get(path)!.perceptualHash!,
-        path: path
+        identifier: path
       }));
-      const vpTree = new VPTree(bucketEntries, this.hammingDistance);  
+      const vpTree = new VPTree(bucketEntries, this.hammingDistance.bind(this));  
       for (const filePath of bucket) {
         if (processedFiles.has(filePath)) continue;
   
         const fileInfo = fileInfoMap.get(filePath)!;
         let duplicateSet: DuplicateSet | undefined;
   
-        const nearestNeighbors = vpTree.nearestNeighbors(fileInfo.perceptualHash!, bucket.length);
+        const nearestNeighbors = vpTree.nearestNeighbors(fileInfo.perceptualHash!, {
+            k: Infinity,
+            distance: hammingThreshold,
+        });
+
+        console.log(nearestNeighbors);
   
         for (const neighbor of nearestNeighbors) {
-            if (neighbor.path === filePath) continue;
-            if (processedFiles.has(neighbor.path)) continue;
-  
-            if (this.hammingDistance(fileInfo.perceptualHash!, neighbor.hash) <= hammingThreshold) {
+            if (neighbor.identifier === filePath) continue;
             if (!duplicateSet) {
                 duplicateSet = { bestFile: fileInfo, duplicates: new Set() };
             }
-            this.handleDuplicate(fileInfoMap.get(neighbor.path)!, duplicateSet);
-            processedFiles.add(neighbor.path);
-            } else {
-            break;
-            }
+            this.handleDuplicate(fileInfoMap.get(neighbor.identifier)!, duplicateSet);
+            processedFiles.add(neighbor.identifier);
         }
   
         if (duplicateSet) {
@@ -402,11 +401,22 @@ export class MediaOrganizer {
     return { uniqueFiles, duplicateSets };
   }
 
-  private hammingDistance(str1: string, str2: string): number {
-    if (str1.length !== str2.length) {
-      throw new Error('Strings must be of equal length, got ' + str1.length + ' and ' + str2.length);
+  private hammingDistance(hash1: Buffer, hash2: Buffer): number {
+    let distance = 0;
+    for (let i = 0; i < hash1.length; i++) {
+        distance += this.popcount(hash1[i] ^ hash2[i]);
     }
-    return str1.split('').reduce((count, char, i) => count + (char !== str2[i] ? 1 : 0), 0);
+    return distance;
+}
+
+  private popcount(x: number): number {
+    // Counts the number of set bits (1s) in a binary representation of the number
+    x -= (x >> 1) & 0x55555555;
+    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+    x = (x + (x >> 4)) & 0x0f0f0f0f;
+    x += x >> 8;
+    x += x >> 16;
+    return x & 0x7f;
   }
 
   private handleDuplicate(fileInfo: FileInfo, duplicateSet: DuplicateSet): boolean {
@@ -732,7 +742,7 @@ export class MediaOrganizer {
   
   private async  getFileInfo(filePath: string, resolution: number, frameCount: number): Promise<FileInfo> {
     const fileTypeInfo = MediaOrganizer.getFileType(filePath);
-    let perceptualHashPromise: Promise<string>;
+    let perceptualHashPromise: Promise<Buffer>;
     switch (fileTypeInfo) {
         case FileType.Image:
             perceptualHashPromise = this.getImagePerceptualHash(filePath, resolution);
@@ -768,7 +778,7 @@ export class MediaOrganizer {
     return fileInfo;
   }
   
-  private async calculateFileHash(filePath: string, maxChunkSize = 1024 * 1024): Promise<string> {
+  private async calculateFileHash(filePath: string, maxChunkSize = 1024 * 1024): Promise<Buffer> {
     const hash = createHash('md5');
     const fileSize = (await stat(filePath)).size;
   
@@ -779,8 +789,8 @@ export class MediaOrganizer {
     } else {
       await this.hashFile(filePath, hash);
     }
-  
-    return hash.digest('hex');
+
+    return hash.digest();
   }
   
   private hashFile(filePath: string, hash: Hash, start: number = 0, size?: number): Promise<void> {
@@ -796,7 +806,7 @@ export class MediaOrganizer {
     return this.exiftool.read(path);
   }
   
-  private async getImagePerceptualHash(filePath: string, resolution: number): Promise<string> {
+  private async getImagePerceptualHash(filePath: string, resolution: number): Promise<Buffer> {
     const image = sharp(filePath, { failOnError: true });
   
     try {
@@ -812,7 +822,7 @@ export class MediaOrganizer {
     }
   }
   
-  private getVideoPerceptualHash(filePath: string, numFrames: number = 10, resolution: number = 8): Promise<string> {
+  private getVideoPerceptualHash(filePath: string, numFrames: number = 10, resolution: number = 8): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       ffmpeg.ffprobe(filePath, (err, metadata) => {
         if (err) {
@@ -854,21 +864,38 @@ export class MediaOrganizer {
     });
   }
   
-  private async combineFrameHashes(frameBuffers: Buffer[], resolution: number, numFrames: number): Promise<string> {
-    // concat all frame buffers
-    return frameBuffers.map((buffer) => this.getPerceptualHash(buffer, resolution)).join('').padEnd(resolution * resolution * numFrames, '0');
+  private async combineFrameHashes(frameBuffers: Buffer[], resolution: number, numFrames: number): Promise<Buffer> {
+    const combinedHash  = Buffer.alloc(resolution * resolution * numFrames);
+    
+    // Combine perceptual hashes from each frame
+    for (let i = 0; i < frameBuffers.length; i++) {
+        const frameHash = this.getPerceptualHash(frameBuffers[i], resolution);
+        frameHash.copy(combinedHash, i * frameHash.length);
+    }
+
+    return combinedHash ;
   }
   
-  private getPerceptualHash(imageBuffer: Buffer, resolution: number): string {
+  private getPerceptualHash(imageBuffer: Buffer, resolution: number): Buffer {
     const pixelCount = resolution * resolution;
-    const totalBrightness = imageBuffer.reduce((sum, pixel) => sum + pixel, 0);
-    const averageBrightness = totalBrightness / pixelCount;
-  
-    let hash = '';
+    const pixels = new Uint8Array(pixelCount);
+    const hash = Buffer.alloc(Math.ceil(pixelCount / 8));
+
+    // Convert to grayscale and resize
     for (let i = 0; i < pixelCount; i++) {
-      hash += imageBuffer[i] < averageBrightness ? '0' : '1';
+        pixels[i] = imageBuffer[i];
     }
-  
+
+    // Calculate average
+    const average = pixels.reduce((sum, pixel) => sum + pixel, 0) / pixelCount;
+
+    // Calculate hash
+    for (let i = 0; i < pixelCount; i++) {
+        if (pixels[i] > average) {
+            hash[Math.floor(i / 8)] |= 1 << (i % 8);
+        }
+    }
+
     return hash;
   }
   

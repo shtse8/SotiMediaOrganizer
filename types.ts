@@ -1,8 +1,8 @@
   export interface FileInfo {
     path: string;
     size: number;
-    hash: string;
-    perceptualHash?: string;
+    hash: Buffer;
+    perceptualHash?: Buffer;
     imageDate?: Date;
     fileDate: Date;
     quality?: number;
@@ -45,5 +45,5 @@
   
   export interface DeduplicationResult {
     uniqueFiles: Map<string, FileInfo>;
-    duplicateSets: Map<string, DuplicateSet>;
+    duplicateSets: Map<Buffer, DuplicateSet>;
   }
