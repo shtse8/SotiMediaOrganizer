@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import type { ProgramOptions, DeduplicationResult, GatherFileInfoResult } from './types';
 import { MediaOrganizer } from './MediaOrganizer';
-import { Spinner } from "@topcli/spinner";
+import os from 'os';
 
 async function main() {
   const program = new Command();
@@ -16,10 +16,11 @@ async function main() {
     .option('-e, --error <path>', 'Directory for files that couldn\'t be processed')
     .option('-d, --duplicate <path>', 'Directory for duplicate files')
     .option('--debug <path>', 'Debug directory for storing all files in duplicate sets')
+    .option('-c, --concurrency <number>', 'Number of workers to use (default: half of CPU cores)', Math.max(1, Math.floor(os.cpus().length / 2)).toString())
     .option('-m, --move', 'Move files instead of copying them', false)
-    .option('-r, --resolution <number>', 'Resolution for perceptual hashing', '8')
+    .option('-r, --resolution <number>', 'Resolution for perceptual hashing', '64')
     .option('--frame-count <number>', 'Number of frames to extract from videos for perceptual hashing', '5')
-    .option('-s, --similarity <number>', 'Similarity threshold for perceptual hashing', '0.95')
+    .option('-s, --similarity <number>', 'Similarity threshold for perceptual hashing', '0.99')
     .option('-f, --format <string>', 'Format for target directory', '{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}')
     .parse(process.argv);
 
@@ -28,25 +29,52 @@ async function main() {
   const organizer = new MediaOrganizer();
 
   try {
+
+    const resolution = parseInt(options.resolution, 10);
+    if (resolution < 1) {
+      throw new Error('Resolution must be a positive integer');
+    }
+
+    const frameCount = parseInt(options.frameCount, 10);
+    if (frameCount < 1) {
+      throw new Error('Frame count must be a positive integer');
+    }
+
+    const similarity = parseFloat(options.similarity);
+    if (similarity <= 0 || similarity >= 1) {
+      throw new Error('Similarity must be between 0 and 1');
+    }
+
+    const concurrency = parseInt(options.concurrency, 10);
+    if (concurrency < 1) {
+      throw new Error('Concurrency must be a positive integer');
+    }
+
     
 
     // Stage 1: File Discovery
     console.log(chalk.blue('Stage 1: Discovering files...'));
-    const discoveredFiles = await organizer.discoverFiles(options.source);
+    const discoveredFiles = await organizer.discoverFiles(
+      options.source,
+      concurrency,
+    );
 
     // Stage 2: Gathering Information
     console.log(chalk.blue('\nStage 2: Gathering file information...'));
     const gatherFileInfoResult = await organizer.gatherFileInfo(
       discoveredFiles, 
-      parseInt(options.resolution, 10), 
-      parseInt(options.frameCount, 10)
+      resolution, 
+      frameCount,
+      concurrency
     );
 
     // Stage 3: Deduplication
     console.log(chalk.blue('\nStage 3: Deduplicating files...'));
     const deduplicationResult = await organizer.deduplicateFiles(
       gatherFileInfoResult.fileInfoMap, 
-      parseFloat(options.similarity)
+      resolution,
+      frameCount,
+      similarity,
     );
 
     // Stage 4: File Transfer

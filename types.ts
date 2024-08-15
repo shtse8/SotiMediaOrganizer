@@ -21,7 +21,7 @@
     error?: string;
     duplicate?: string;
     debug?: string;
-    workers: string;
+    concurrency: string;
     move: boolean;
     resolution: string;
     frameCount: string;
