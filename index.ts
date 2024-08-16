@@ -232,8 +232,9 @@ function printResults(
     chalk.red(`Files with errors: ${gatherFileInfoResult.errorFiles.length}`),
   );
 }
-
-main().catch((error) => {
-  console.error(chalk.red("An unexpected error occurred:"), error);
-  process.exit(1);
-});
+try {
+await main()
+} catch (error) {
+    console.error(chalk.red("An unexpected error occurred:"), error);
+    process.exit(1);
+  }
