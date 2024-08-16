@@ -113,7 +113,3 @@ We welcome contributions from the community! Feel free to fork the repository, m
 ## 📝 License
 
 SMO is open-source software, licensed under the MIT License.
-
----
-
-Let me know if there’s anything else you’d like to add or change!
