@@ -54,7 +54,78 @@ async function main() {
       "-f, --format <string>",
       "Format for target directory",
       "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}",
-    )
+    ).addHelpText('after', `
+Format string placeholders:
+  Image date (I.), File date (F.), Mixed date (D.):
+    {*.YYYY} - Year (4 digits)       {*.YY} - Year (2 digits)
+    {*.MMMM} - Month (full name)     {*.MMM} - Month (short name)
+    {*.MM} - Month (2 digits)        {*.M} - Month (1-2 digits)
+    {*.DD} - Day (2 digits)          {*.D} - Day (1-2 digits)
+    {*.DDDD} - Day (full name)       {*.DDD} - Day (short name)
+    {*.HH} - Hour, 24h (2 digits)    {*.H} - Hour, 24h (1-2 digits)
+    {*.hh} - Hour, 12h (2 digits)    {*.h} - Hour, 12h (1-2 digits)
+    {*.mm} - Minute (2 digits)       {*.m} - Minute (1-2 digits)
+    {*.ss} - Second (2 digits)       {*.s} - Second (1-2 digits)
+    {*.a} - am/pm                    {*.A} - AM/PM
+    {*.WW} - Week of year (2 digits)
+
+  Filename:
+    {NAME} - Original filename (without extension)
+    {NAME.L} - Lowercase filename
+    {NAME.U} - Uppercase filename
+    {EXT} - File extension (without dot)
+    {RND} - Random 8-character hexadecimal string (for unique filenames)
+
+  Other:
+    {GEO} - Geolocation              {CAM} - Camera model
+    {TYPE} - 'Image' or 'Other'
+    {HAS.GEO} - 'GeoTagged' or 'NoGeo'
+    {HAS.CAM} - 'WithCamera' or 'NoCamera'
+    {HAS.DATE} - 'Dated' or 'NoDate'
+
+Example format strings:
+  "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}"
+  "{HAS.GEO}/{HAS.CAM}/{D.YYYY}/{D.MM}/{NAME}_{D.HH}{D.mm}.{EXT}"
+  "{TYPE}/{D.YYYY}/{D.WW}/{CAM}/{D.YYYY}{D.MM}{D.DD}_{NAME.L}.{EXT}"
+  "{HAS.DATE}/{D.YYYY}/{D.MMMM}/{D.D}-{D.DDDD}/{D.h}{D.mm}{D.a}_{NAME}.{EXT}"
+  "{TYPE}/{CAM}/{D.YYYY}/{D.MM}/{D.DD}_{D.HH}{D.mm}_{NAME.U}.{EXT}"
+    `)
+    .addHelpText('after', `
+      Format string placeholders:
+        Image date (I.), File date (F.), Mixed date (D.):
+          {*.YYYY} - Year (4 digits)       {*.YY} - Year (2 digits)
+          {*.MMMM} - Month (full name)     {*.MMM} - Month (short name)
+          {*.MM} - Month (2 digits)        {*.M} - Month (1-2 digits)
+          {*.DD} - Day (2 digits)          {*.D} - Day (1-2 digits)
+          {*.DDDD} - Day (full name)       {*.DDD} - Day (short name)
+          {*.HH} - Hour, 24h (2 digits)    {*.H} - Hour, 24h (1-2 digits)
+          {*.hh} - Hour, 12h (2 digits)    {*.h} - Hour, 12h (1-2 digits)
+          {*.mm} - Minute (2 digits)       {*.m} - Minute (1-2 digits)
+          {*.ss} - Second (2 digits)       {*.s} - Second (1-2 digits)
+          {*.a} - am/pm                    {*.A} - AM/PM
+          {*.WW} - Week of year (2 digits)
+      
+        Filename:
+          {NAME} - Original filename (without extension)
+          {NAME.L} - Lowercase filename
+          {NAME.U} - Uppercase filename
+          {EXT} - File extension (without dot)
+          {RND} - Random 8-character hexadecimal string (for unique filenames)
+      
+        Other:
+          {GEO} - Geolocation              {CAM} - Camera model
+          {TYPE} - 'Image' or 'Other'
+          {HAS.GEO} - 'GeoTagged' or 'NoGeo'
+          {HAS.CAM} - 'WithCamera' or 'NoCamera'
+          {HAS.DATE} - 'Dated' or 'NoDate'
+      
+      Example format strings:
+        "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}"
+        "{HAS.GEO}/{HAS.CAM}/{D.YYYY}/{D.MM}/{NAME}_{D.HH}{D.mm}.{EXT}"
+        "{TYPE}/{D.YYYY}/{D.WW}/{CAM}/{D.YYYY}{D.MM}{D.DD}_{NAME.L}.{EXT}"
+        "{HAS.DATE}/{D.YYYY}/{D.MMMM}/{D.D}-{D.DDDD}/{D.h}{D.mm}{D.a}_{NAME}.{EXT}"
+        "{TYPE}/{CAM}/{D.YYYY}/{D.MM}/{D.DD}_{D.HH}{D.mm}_{NAME.U}.{EXT}"
+          `)
     .parse(process.argv);
 
   const options = program.opts() as ProgramOptions;
