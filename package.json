@@ -1,5 +1,5 @@
 {
-  "name": "soti-media-organizer",
+  "name": "smo",
   "version": "1.0.0",
   "description": "A powerful CLI tool to organize photos and videos based on their creation date and metadata, with support for duplicate detection and customizable directory structure.",
   "main": "index.ts",
@@ -9,15 +9,21 @@
   },
   "scripts": {
     "start": "bun run index.ts",
-    "build": "bun build index.ts --outdir dist --target node --external lmdb",
+    "build": "bun build index.ts --outdir dist --target node --external lmdb --external sharp --external exiftool-vendored --external fluent-ffmpeg",
     "start:node": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "prepare": "husky install",
+    "prepare": "husky",
     "lint": "eslint ."
   },
   "author": "shtse8",
   "license": "MIT",
   "dependencies": {
+    "exiftool-vendored": "^24.4.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "lmdb": "^3.0.13",
+    "sharp": "^0.33.4"
+  },
+  "devDependencies": {
     "@datastructures-js/heap": "^4.3.3",
     "@topcli/spinner": "^2.1.2",
     "@types/cli-progress": "^3.11.6",
@@ -25,23 +31,16 @@
     "chalk": "^5.3.0",
     "cli-progress": "^3.12.0",
     "commander": "^9.4.0",
-    "exiftool-vendored": "^24.4.0",
-    "fluent-ffmpeg": "^2.1.3",
-    "husky": "^9.1.4",
-    "lint-staged": "^15.2.9",
-    "lmdb": "^3.0.13",
     "node-addon-api": "^8.1.0",
     "node-gyp": "^10.2.0",
-    "sharp": "^0.33.4"
-  },
-  "devDependencies": {
+    "lint-staged": "^15.2.9",
     "@eslint/js": "^9.9.0",
     "@types/bun": "latest",
     "eslint": "^9.9.0",
     "globals": "^15.9.0",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.1.0",
-    "husky": "^8.0.0"
+    "husky": "^9.1.4"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
