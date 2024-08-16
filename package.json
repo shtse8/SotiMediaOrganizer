@@ -13,6 +13,8 @@
     "start:node": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepare": "husky",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
     "lint": "eslint ."
   },
   "author": "shtse8",
@@ -24,6 +26,7 @@
     "sharp": "^0.33.4"
   },
   "devDependencies": {
+    "prettier": "^3.3.3",
     "@datastructures-js/heap": "^4.3.3",
     "@topcli/spinner": "^2.1.2",
     "@types/cli-progress": "^3.11.6",

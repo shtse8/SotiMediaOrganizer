@@ -268,11 +268,12 @@ export class MediaOrganizer {
       }
     }
 
-    const sortedFormats = Array.from(filesByFormat.keys()).sort((a, b) =>
-      MediaOrganizer.getFileTypeByExt(a) - MediaOrganizer.getFileTypeByExt(b) ||
-      filesByFormat.get(b)!.length - filesByFormat.get(a)!.length
+    const sortedFormats = Array.from(filesByFormat.keys()).sort(
+      (a, b) =>
+        MediaOrganizer.getFileTypeByExt(a) -
+          MediaOrganizer.getFileTypeByExt(b) ||
+        filesByFormat.get(b)!.length - filesByFormat.get(a)!.length,
     );
-    
 
     const bars = new Map<string, cliProgress.Bar>();
     for (const format of sortedFormats) {
@@ -295,7 +296,6 @@ export class MediaOrganizer {
       });
       bars.set(format, bar);
     }
-
 
     // Process files format by format
     for (const format of sortedFormats) {
@@ -326,7 +326,6 @@ export class MediaOrganizer {
             if (fileInfo.geoLocation) stats.withGeoCount++;
             if (fileInfo.imageDate) stats.withImageDateCount++;
             if (fileInfo.cameraModel) stats.withCameraCount++;
-
           } catch {
             stats.errorCount++;
             errorFiles.push(file);
@@ -654,7 +653,7 @@ export class MediaOrganizer {
     const ext = extname(filePath).slice(1).toLowerCase();
     return MediaOrganizer.getFileTypeByExt(ext);
   }
-  
+
   static getFileTypeByExt(ext: string): FileType {
     for (const fileType of [FileType.Image, FileType.Video]) {
       if (MediaOrganizer.SUPPORTED_EXTENSIONS[fileType].has(ext)) {

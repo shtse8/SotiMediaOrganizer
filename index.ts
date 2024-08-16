@@ -54,7 +54,10 @@ async function main() {
       "-f, --format <string>",
       "Format for target directory",
       "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}",
-    ).addHelpText('after', `
+    )
+    .addHelpText(
+      "after",
+      `
 Format string placeholders:
   Image date (I.), File date (F.), Mixed date (D.):
     {*.YYYY} - Year (4 digits)       {*.YY} - Year (2 digits)
@@ -89,8 +92,11 @@ Example format strings:
   "{TYPE}/{D.YYYY}/{D.WW}/{CAM}/{D.YYYY}{D.MM}{D.DD}_{NAME.L}.{EXT}"
   "{HAS.DATE}/{D.YYYY}/{D.MMMM}/{D.D}-{D.DDDD}/{D.h}{D.mm}{D.a}_{NAME}.{EXT}"
   "{TYPE}/{CAM}/{D.YYYY}/{D.MM}/{D.DD}_{D.HH}{D.mm}_{NAME.U}.{EXT}"
-    `)
-    .addHelpText('after', `
+    `,
+    )
+    .addHelpText(
+      "after",
+      `
       Format string placeholders:
         Image date (I.), File date (F.), Mixed date (D.):
           {*.YYYY} - Year (4 digits)       {*.YY} - Year (2 digits)
@@ -125,7 +131,8 @@ Example format strings:
         "{TYPE}/{D.YYYY}/{D.WW}/{CAM}/{D.YYYY}{D.MM}{D.DD}_{NAME.L}.{EXT}"
         "{HAS.DATE}/{D.YYYY}/{D.MMMM}/{D.D}-{D.DDDD}/{D.h}{D.mm}{D.a}_{NAME}.{EXT}"
         "{TYPE}/{CAM}/{D.YYYY}/{D.MM}/{D.DD}_{D.HH}{D.mm}_{NAME.U}.{EXT}"
-          `)
+          `,
+    )
     .parse(process.argv);
 
   const options = program.opts() as ProgramOptions;
