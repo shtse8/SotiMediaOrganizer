@@ -3,3 +3,4 @@
 
 bun test
 bunx eslint .
+bunx prettier --write .
