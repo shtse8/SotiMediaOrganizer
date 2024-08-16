@@ -1,5 +1,5 @@
 {
-  "name": "@soti/smo",
+  "name": "@sotilab/smo",
   "version": "1.0.0",
   "description": "A powerful CLI tool to organize photos and videos based on their creation date and metadata, with support for duplicate detection and customizable directory structure.",
   "publishConfig": {
