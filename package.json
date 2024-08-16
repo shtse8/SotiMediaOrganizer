@@ -1,6 +1,6 @@
 {
   "name": "@sotilab/smo",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A powerful CLI tool to organize photos and videos based on their creation date and metadata, with support for duplicate detection and customizable directory structure.",
   "publishConfig": {
     "access": "public"
@@ -12,7 +12,9 @@
   },
   "scripts": {
     "start": "bun run index.ts",
-    "build": "bun build index.ts --outdir dist --target node --external lmdb --external sharp --external exiftool-vendored --external fluent-ffmpeg",
+    "build:windows": "bun build index.ts --compile --outfile dist/smo.exe --target bun-windows-x64 --external lmdb --external sharp --external exiftool-vendored --external fluent-ffmpeg",
+    "build:linux": "bun build index.ts --compile --outfile dist/smo-linux --target bun-linux-x64 --external lmdb --external sharp --external exiftool-vendored --external fluent-ffmpeg",
+    "build": "bun run build:windows && bun run build:linux",
     "start:node": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepare": "husky",
