@@ -268,10 +268,14 @@ export class MediaOrganizer {
       }
     }
 
-    const bars = new Map<string, cliProgress.Bar>();
-    for (const format of MediaOrganizer.ALL_SUPPORTED_EXTENSIONS) {
-      if (!filesByFormat.has(format)) continue;
+    const sortedFormats = Array.from(filesByFormat.keys()).sort((a, b) =>
+      MediaOrganizer.getFileTypeByExt(a) - MediaOrganizer.getFileTypeByExt(b) ||
+      filesByFormat.get(b)!.length - filesByFormat.get(a)!.length
+    );
+    
 
+    const bars = new Map<string, cliProgress.Bar>();
+    for (const format of sortedFormats) {
       const formatFiles = filesByFormat.get(format)!;
 
       const stats: Stats = {
@@ -292,10 +296,9 @@ export class MediaOrganizer {
       bars.set(format, bar);
     }
 
-    // Process files format by format
-    for (const format of MediaOrganizer.ALL_SUPPORTED_EXTENSIONS) {
-      if (!filesByFormat.has(format)) continue;
 
+    // Process files format by format
+    for (const format of sortedFormats) {
       const formatFiles = filesByFormat.get(format)!;
       const stats = formatStats.get(format)!;
       const bar = bars.get(format)!;
@@ -320,21 +323,20 @@ export class MediaOrganizer {
             }
             fileInfoMap.set(file, fileInfo);
 
-            stats.processedCount++;
             if (fileInfo.geoLocation) stats.withGeoCount++;
             if (fileInfo.imageDate) stats.withImageDateCount++;
             if (fileInfo.cameraModel) stats.withCameraCount++;
 
-            bar.update(stats.processedCount, stats);
           } catch {
-            stats.processedCount++;
             stats.errorCount++;
             errorFiles.push(file);
-            bar.update(stats.processedCount, stats);
 
             // if (multibar.log) {
             //   multibar.log(`Error processing file ${file}: ${error}`);
             // }
+          } finally {
+            stats.processedCount++;
+            bar.update(stats.processedCount, stats);
           }
         });
       }
@@ -650,13 +652,16 @@ export class MediaOrganizer {
 
   static getFileType(filePath: string): FileType {
     const ext = extname(filePath).slice(1).toLowerCase();
-    if (MediaOrganizer.SUPPORTED_EXTENSIONS[FileType.Image].has(ext)) {
-      return FileType.Image;
-    } else if (MediaOrganizer.SUPPORTED_EXTENSIONS[FileType.Video].has(ext)) {
-      return FileType.Video;
-    } else {
-      throw new Error(`Unsupported file type for file ${filePath}`);
+    return MediaOrganizer.getFileTypeByExt(ext);
+  }
+  
+  static getFileTypeByExt(ext: string): FileType {
+    for (const fileType of [FileType.Image, FileType.Video]) {
+      if (MediaOrganizer.SUPPORTED_EXTENSIONS[fileType].has(ext)) {
+        return fileType;
+      }
     }
+    throw new Error(`Unsupported file type for file ${ext}`);
   }
 
   private async transferOrCopyFile(
