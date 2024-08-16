@@ -1,6 +1,6 @@
 {
   "name": "@sotilab/smo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A powerful CLI tool to organize photos and videos based on their creation date and metadata, with support for duplicate detection and customizable directory structure.",
   "publishConfig": {
     "access": "public"
@@ -24,6 +24,7 @@
   "license": "MIT",
   "dependencies": {
     "exiftool-vendored": "^24.4.0",
+    "exiftool-vendored.pl": "^12.91.0",
     "fluent-ffmpeg": "^2.1.3",
     "lmdb": "^3.0.13",
     "sharp": "^0.33.4"
