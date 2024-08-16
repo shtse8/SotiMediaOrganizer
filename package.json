@@ -1,15 +1,19 @@
 {
-  "name": "SotiMediaOrganizer",
+  "name": "soti-media-organizer",
   "version": "1.0.0",
   "description": "A powerful CLI tool to organize photos and videos based on their creation date and metadata, with support for duplicate detection and customizable directory structure.",
   "main": "index.ts",
   "type": "module",
+  "bin": {
+    "smo": "./dist/index.js"
+  },
   "scripts": {
     "start": "bun run index.ts",
-    "build": "tsc",
+    "build": "bun build index.ts --outdir dist --target node --external lmdb",
     "start:node": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "lint": "eslint ."
   },
   "author": "shtse8",
   "license": "MIT",
@@ -22,15 +26,13 @@
     "cli-progress": "^3.12.0",
     "commander": "^9.4.0",
     "exiftool-vendored": "^24.4.0",
-    "exiftool-vendored.pl": "^12.91.0",
     "fluent-ffmpeg": "^2.1.3",
     "husky": "^9.1.4",
     "lint-staged": "^15.2.9",
     "lmdb": "^3.0.13",
     "node-addon-api": "^8.1.0",
     "node-gyp": "^10.2.0",
-    "sharp": "^0.33.4",
-    "workerpool": "^9.1.3"
+    "sharp": "^0.33.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
