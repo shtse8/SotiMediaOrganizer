@@ -233,8 +233,8 @@ function printResults(
   );
 }
 try {
-await main()
+  await main();
 } catch (error) {
-    console.error(chalk.red("An unexpected error occurred:"), error);
-    process.exit(1);
-  }
+  console.error(chalk.red("An unexpected error occurred:"), error);
+  process.exit(1);
+}
