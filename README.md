@@ -16,7 +16,7 @@
 Install SMO globally with Bun:
 
 ```bash
-bun install --global smo
+bun install --global @sotilab/smo
 ```
 
 This command makes `smo` available directly from your terminal.
