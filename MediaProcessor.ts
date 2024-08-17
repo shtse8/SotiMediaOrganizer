@@ -24,7 +24,7 @@ export class MediaProcessor {
     const fileType = this.getFileType(filePath);
     const metadata = await this.getMetadata(filePath);
     const duration = await this.getMediaDuration(filePath, fileType).then(
-      (d) => (isNaN(d) ? 1000 : d),
+      (d) => (isNaN(d) ? 0 : d),
     );
     const frames = await this.extractFrames(filePath, fileType, duration);
 
@@ -41,6 +41,8 @@ export class MediaProcessor {
       imageDate:
         this.toDate(metadata.DateTimeOriginal) ??
         this.toDate(metadata.MediaCreateDate),
+      width: metadata.ImageWidth ?? 0,
+      height: metadata.ImageHeight ?? 0,
       quality: (metadata.ImageHeight ?? 0) * (metadata.ImageWidth ?? 0),
       geoLocation:
         metadata.GPSLatitude && metadata.GPSLongitude
@@ -71,7 +73,7 @@ export class MediaProcessor {
     const metadata = await promisify<string, ffmpeg.FfprobeData>(
       ffmpeg.ffprobe,
     )(filePath);
-    return (metadata.format.duration || 0) * 1000; // Convert to milliseconds
+    return metadata.format.duration || 0;
   }
 
   private async extractFrames(
@@ -103,10 +105,10 @@ export class MediaProcessor {
     duration: number,
   ): Promise<FrameInfo[]> {
     const frameCount = Math.min(
-      Math.ceil((duration / 1000) * this.config.framesPerSecond),
+      Math.ceil(duration * this.config.framesPerSecond),
       this.config.maxFrames,
     );
-    const interval = Math.max(1, duration / 1000 / (frameCount + 1));
+    const interval = Math.max(1, duration / (frameCount + 1));
     const frames: FrameInfo[] = [];
 
     return new Promise((resolve, reject) => {

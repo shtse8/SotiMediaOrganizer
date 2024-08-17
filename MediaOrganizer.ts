@@ -7,8 +7,17 @@ import {
   type PathEntry,
   type ProcessingConfig,
   FileType,
+  type DuplicateSet,
 } from "./types";
-import { mkdir, copyFile, rename, unlink } from "fs/promises";
+import {
+  mkdir,
+  copyFile,
+  rename,
+  unlink,
+  writeFile,
+  stat,
+  readdir,
+} from "fs/promises";
 import { join, basename, dirname, extname, parse } from "path";
 import { existsSync } from "fs";
 import crypto from "crypto";
@@ -16,8 +25,6 @@ import chalk from "chalk";
 import { MultiBar, Presets } from "cli-progress";
 import { Semaphore } from "async-mutex";
 import cliProgress from "cli-progress";
-import { readdir } from "fs/promises";
-import { stat } from "fs/promises";
 import { createHash, type Hash } from "crypto";
 import { createReadStream } from "fs";
 import path from "path";
@@ -52,13 +59,13 @@ export class MediaOrganizer {
     return `${fileHash.toString("hex")}-${this.getConfigHash(config)}`;
   }
 
-  async getFileInfo(
-    filePath: string,
-    config: ProcessingConfig,
-  ): Promise<FileInfo | undefined> {
+  async getFileInfo(filePath: string): Promise<FileInfo | undefined> {
     const pathEntry = await this.pathDb.get(filePath);
     if (!pathEntry) return undefined;
-    const fileInfoKey = this.getFileInfoKey(pathEntry.hash, config);
+    const fileInfoKey = this.getFileInfoKey(
+      pathEntry.hash,
+      this.processor.config,
+    );
     return this.fileInfoDb.get(fileInfoKey);
   }
 
@@ -277,7 +284,7 @@ export class MediaOrganizer {
         await semaphore.waitForUnlock();
         semaphore.runExclusive(async () => {
           try {
-            let fileInfo = await this.getFileInfo(file, this.processor.config);
+            let fileInfo = await this.getFileInfo(file);
             if (
               fileInfo &&
               this.isConfigMatch(
@@ -329,7 +336,7 @@ export class MediaOrganizer {
 
     const fileInfoMap = new Map<string, FileInfo>();
     for (const file of files) {
-      const fileInfo = await this.getFileInfo(file, this.processor.config);
+      const fileInfo = await this.getFileInfo(file);
       if (!fileInfo) {
         throw new Error(`File info not found for file ${file}`);
       }
@@ -433,6 +440,228 @@ export class MediaOrganizer {
 
     return { uniqueFiles, duplicateSets };
   }
+  private async generateReports(
+    duplicateSets: DuplicateSet[],
+    debugDir: string,
+  ): Promise<string[]> {
+    const reports = [];
+    const reportFiles = [];
+    const batchSize = 1000;
+
+    for (let i = 0; i < duplicateSets.length; i += batchSize) {
+      const batch = duplicateSets.slice(i, i + batchSize);
+
+      const totalSets = batch.length;
+      let totalRepresentatives = 0;
+      let totalDuplicates = 0;
+
+      batch.forEach((set) => {
+        totalRepresentatives += set.representatives.size;
+        totalDuplicates += set.duplicates.size;
+      });
+
+      const formatFileSize = (size: number) =>
+        `${(size / (1024 * 1024)).toFixed(2)} MB`;
+      const formatDate = (date?: Date) =>
+        date ? date.toDateString() : "Unknown";
+      const formatGeoLocation = (geoLocation?: string) =>
+        geoLocation || "Unknown";
+      const formatDuration = (duration: number) => {
+        const seconds = Math.floor((duration / 1000) % 60);
+        const minutes = Math.floor((duration / (1000 * 60)) % 60);
+        const hours = Math.floor((duration / (1000 * 60 * 60)) % 24);
+        return `${hours ? `${hours}:` : ""}${minutes ? `${minutes}:` : ""}${seconds}s`;
+      };
+
+      const generateFileDetails = (fileInfo: FileInfo, score: number) => {
+        const resolution =
+          fileInfo.width && fileInfo.height
+            ? `${fileInfo.width}x${fileInfo.height}`
+            : "Unknown";
+        return `
+                <p><strong style="font-size: 16px; color: #ff5722;">Score:</strong> <span style="font-size: 16px; color: #ff5722;">${score.toFixed(2)}</span></p>
+                <p><strong>Size:</strong> ${formatFileSize(fileInfo.size)}</p>
+                ${fileInfo.width && fileInfo.height ? `<p><strong>Resolution:</strong> ${resolution}</p>` : ""}
+                ${fileInfo.duration ? `<p><strong>Duration:</strong> ${formatDuration(fileInfo.duration)}</p>` : ""}
+                ${fileInfo.effectiveFrames !== undefined ? `<p><strong>Effective Frames:</strong> ${fileInfo.effectiveFrames}</p>` : ""}
+                ${fileInfo.imageDate ? `<p><strong>Date:</strong> ${formatDate(fileInfo.imageDate)}</p>` : ""}
+                ${fileInfo.geoLocation ? `<p><strong>Geo-location:</strong> ${formatGeoLocation(fileInfo.geoLocation)}</p>` : ""}
+                ${fileInfo.cameraModel ? `<p><strong>Camera:</strong> ${fileInfo.cameraModel}</p>` : ""}
+            `;
+      };
+
+      const convertToRelativePath = (sourcePath: string): string => {
+        const relativePath = path.relative(debugDir, sourcePath);
+        return relativePath.replace(/\\/g, "/"); // Convert backslashes to forward slashes for web compatibility
+      };
+
+      const isVideoFile = (path: string): boolean => {
+        return /\.(mp4|mov|avi|wmv|flv|mkv)$/i.test(path);
+      };
+
+      const generateMediaElement = (
+        relativePath: string,
+        isRepresentative: boolean,
+      ): string => {
+        const className = isRepresentative ? "representative" : "duplicate";
+        if (isVideoFile(relativePath)) {
+          const placeholder =
+            "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+          return `
+                    <video class="${className}" src="${placeholder}" data-src="${relativePath}" controls muted playsinline preload="none">
+                        Your browser does not support the video tag.
+                    </video>`;
+        } else {
+          return `<img src="${relativePath}" alt="${relativePath}" loading="lazy" class="${className}"/>`;
+        }
+      };
+
+      const generateSetSection = async (
+        setIndex: number,
+        representatives: Set<string>,
+        duplicates: Set<string>,
+      ) => {
+        const allMedia = await Promise.all([
+          ...Array.from(representatives).map(async (sourcePath) => {
+            const info = await this.getFileInfo(sourcePath);
+            const score = this.comparator.calculateEntryScore(info!);
+            const relativePath = convertToRelativePath(sourcePath);
+            return { isRepresentative: true, relativePath, info, score };
+          }),
+          ...Array.from(duplicates).map(async (sourcePath) => {
+            const info = await this.getFileInfo(sourcePath);
+            const score = this.comparator.calculateEntryScore(info!);
+            const relativePath = convertToRelativePath(sourcePath);
+            return { isRepresentative: false, relativePath, info, score };
+          }),
+        ]);
+
+        allMedia.sort((a, b) => b.score - a.score);
+
+        const mediaTags = allMedia
+          .map(
+            ({ isRepresentative, relativePath, info, score }) => `
+                    <div class="media-container">
+                        <a href="${relativePath}" target="_blank" title="Click to view full size">
+                            ${generateMediaElement(relativePath, isRepresentative)}
+                        </a>
+                        ${generateFileDetails(info!, score)}
+                    </div>`,
+          )
+          .join("\n");
+
+        return `
+                <div class="set">
+                    <h2>Duplicate Set ${i + setIndex + 1}</h2>
+                    <div class="media-row">
+                        ${mediaTags}
+                    </div>
+                </div>`;
+      };
+
+      const setsHtml = await Promise.all(
+        Array.from(batch).map((set, index) =>
+          generateSetSection(index, set.representatives, set.duplicates),
+        ),
+      );
+
+      const reportContent = `
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Deduplication Debug Report</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f9f9f9; color: #333; }
+                    h1 { color: #444; font-size: 24px; margin-bottom: 20px; text-align: center; }
+                    h2 { color: #555; font-size: 20px; margin-top: 30px; }
+                    .summary { text-align: center; margin-bottom: 30px; }
+                    .summary p { font-size: 18px; margin: 5px 0; }
+                    .set { background-color: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); margin-bottom: 20px; }
+                    .media-row { display: flex; flex-wrap: wrap; justify-content: space-around; }
+                    .media-container { text-align: center; margin-bottom: 20px; max-width: 220px; }
+                    img, video { max-width: 200px; max-height: 200px; border-width: 3px; border-style: solid; border-radius: 8px; }
+                    img.representative, video.representative { border-color: #007bff; } /* Blue border for representatives */
+                    img.duplicate, video.duplicate { border-color: #ccc; } /* Light grey border for duplicates */
+                    p { font-size: 14px; margin: 5px 0; }
+                </style>
+                <script>
+                    document.addEventListener("DOMContentLoaded", function() {
+                        let lazyVideos = [].slice.call(document.querySelectorAll("video[data-src]"));
+                        if ("IntersectionObserver" in window) {
+                            let lazyVideoObserver = new IntersectionObserver(function(entries, observer) {
+                                entries.forEach(function(video) {
+                                    if (video.isIntersecting) {
+                                        let lazyVideo = video.target;
+                                        lazyVideo.src = lazyVideo.dataset.src;
+                                        lazyVideoObserver.unobserve(lazyVideo);
+                                    }
+                                });
+                            });
+
+                            lazyVideos.forEach(function(lazyVideo) {
+                                lazyVideoObserver.observe(lazyVideo);
+                            });
+                        }
+                    });
+                </script>
+            </head>
+            <body>
+                <h1>Deduplication Debug Report</h1>
+                <div class="summary">
+                    <p><strong>Total Duplicate Sets:</strong> ${totalSets}</p>
+                    <p><strong>Total Representatives:</strong> ${totalRepresentatives}</p>
+                    <p><strong>Total Duplicates:</strong> ${totalDuplicates}</p>
+                </div>
+                ${setsHtml.join("\n")}
+            </body>
+            </html>
+        `;
+
+      const reportFileName = `debug-report-${reports.length + 1}.html`;
+      const reportPath = join(debugDir, reportFileName);
+      await writeFile(reportPath, reportContent, "utf8");
+      reportFiles.push(reportFileName);
+    }
+
+    return reportFiles;
+  }
+
+  private async generateIndex(reportFiles: string[], debugDir: string) {
+    const indexContent = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Deduplication Report Index</title>
+          <style>
+              body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f9f9f9; color: #333; }
+              h1 { color: #444; font-size: 24px; margin-bottom: 20px; text-align: center; }
+              ul { list-style-type: none; padding: 0; }
+              li { margin-bottom: 15px; }
+              a { color: #007bff; text-decoration: none; font-size: 18px; font-weight: bold; }
+              a:hover { text-decoration: underline; }
+              .report-link { padding: 10px; background-color: #e0f7fa; border-radius: 5px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); display: block; text-align: center; }
+              .report-link:hover { background-color: #b2ebf2; }
+          </style>
+      </head>
+      <body>
+          <h1>Deduplication Report Index</h1>
+          <ul>
+              ${reportFiles.map((file, index) => `<li><a class="report-link" href="${file}" target="_blank">Report ${index + 1}</a></li>`).join("\n")}
+          </ul>
+      </body>
+      </html>
+  `;
+
+    const indexPath = join(debugDir, "index.html");
+    await writeFile(indexPath, indexContent, "utf8");
+    console.log(
+      chalk.yellow(`Deduplication report index has been saved to ${indexPath}`),
+    );
+  }
 
   async transferFiles(
     gatherFileInfoResult: GatherFileInfoResult,
@@ -444,6 +673,34 @@ export class MediaOrganizer {
     format: string,
     shouldMove: boolean,
   ): Promise<void> {
+    // Debug mode: Copy all files in duplicate sets
+    if (debugDir) {
+      await mkdir(debugDir, { recursive: true });
+
+      // clear the debug directory
+      const debugFiles = await readdir(debugDir);
+      for (const file of debugFiles) {
+        await unlink(join(debugDir, file));
+      }
+
+      if (deduplicationResult.duplicateSets.length > 0) {
+        // Generate HTML content for all sets
+        const reportFiles = await this.generateReports(
+          deduplicationResult.duplicateSets,
+          debugDir,
+        );
+        await this.generateIndex(reportFiles, debugDir);
+
+        console.log(
+          chalk.yellow(
+            `Debug mode: Duplicate set reports have been saved to ${debugDir}`,
+          ),
+        );
+      } else {
+        console.log(chalk.yellow("Debug mode: No duplicate sets found"));
+      }
+    }
+
     const multibar = new MultiBar(
       {
         clearOnComplete: false,
@@ -456,51 +713,13 @@ export class MediaOrganizer {
       Presets.shades_classic,
     );
 
-    // Debug mode: Copy all files in duplicate sets
-    if (debugDir) {
-      const debugCount = Array.from(
-        deduplicationResult.duplicateSets.values(),
-      ).reduce(
-        (sum, set) => sum + set.duplicates.size + set.representatives.size,
-        0,
-      );
-      const debugBar = multibar.create(debugCount, 0, { phase: "Debug   " });
-
-      for (const duplicateSet of deduplicationResult.duplicateSets) {
-        const bestFile = duplicateSet.bestFile;
-        const duplicateFolderName = basename(bestFile, extname(bestFile));
-        const debugSetFolder = join(debugDir, duplicateFolderName);
-
-        const representatives = duplicateSet.representatives;
-        for (const representativePath of representatives) {
-          // modify the filename to indicate it's a representative
-          const filename = "#" + basename(representativePath);
-          await this.transferOrCopyFile(
-            representativePath,
-            join(debugSetFolder, filename),
-            true,
-          );
-          debugBar.increment();
-        }
-
-        for (const duplicatePath of duplicateSet.duplicates) {
-          await this.transferOrCopyFile(
-            duplicatePath,
-            join(debugSetFolder, basename(duplicatePath)),
-            true,
-          );
-          debugBar.increment();
-        }
-      }
-    }
-
     // Transfer unique files
     const uniqueBar = multibar.create(deduplicationResult.uniqueFiles.size, 0, {
       phase: "Unique  ",
     });
     for (const filePath of deduplicationResult.uniqueFiles) {
       const pathEntry = await this.pathDb.get(filePath);
-      const fileInfo = await this.getFileInfo(filePath, this.processor.config);
+      const fileInfo = await this.getFileInfo(filePath);
       if (!fileInfo) {
         throw new Error(`File info not found for file ${filePath}`);
       }
@@ -556,10 +775,7 @@ export class MediaOrganizer {
         const representatives = duplicateSet.representatives;
         for (const representativePath of representatives) {
           const pathEntry = await this.pathDb.get(representativePath);
-          const fileInfo = await this.getFileInfo(
-            representativePath,
-            this.processor.config,
-          );
+          const fileInfo = await this.getFileInfo(representativePath);
           if (!fileInfo) {
             throw new Error(
               `File info not found for file ${representativePath}`,
@@ -598,13 +814,6 @@ export class MediaOrganizer {
 
     multibar.stop();
     console.log(chalk.green("\nFile transfer completed"));
-    if (debugDir && deduplicationResult.duplicateSets.length > 0) {
-      console.log(
-        chalk.yellow(
-          `Debug mode: All files in duplicate sets have been copied to ${debugDir} for verification.`,
-        ),
-      );
-    }
   }
 
   static getFileType(filePath: string): FileType {
@@ -825,24 +1034,6 @@ export class MediaOrganizer {
     d.setUTCDate(d.getUTCDate() + 4 - dayNum);
     const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
     return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
-  }
-
-  private async calculateFileHash(
-    filePath: string,
-    maxChunkSize = 1024 * 1024,
-  ): Promise<Buffer> {
-    const hash = createHash("md5");
-    const fileSize = (await stat(filePath)).size;
-
-    if (fileSize > maxChunkSize) {
-      const chunkSize = maxChunkSize / 2;
-      await this.hashFile(filePath, hash, 0, chunkSize);
-      await this.hashFile(filePath, hash, fileSize - chunkSize, chunkSize);
-    } else {
-      await this.hashFile(filePath, hash);
-    }
-
-    return hash.digest();
   }
 
   private hashFile(

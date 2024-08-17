@@ -20,6 +20,8 @@ export interface FileInfo {
   frames: FrameInfo[];
   duration: number;
   imageDate?: Date;
+  width: number;
+  height: number;
   quality: number;
   geoLocation?: string;
   cameraModel?: string;

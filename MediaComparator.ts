@@ -68,7 +68,7 @@ export class MediaComparator {
   }
 
   selectRepresentatives<T>(cluster: T[], selector: (node: T) => FileInfo): T[] {
-    const sortedEntries = this.sortEntries(cluster, selector);
+    const sortedEntries = this.scoreEntries(cluster, selector);
     const bestEntry = sortedEntries[0];
     const bestFileInfo = selector(bestEntry);
 
@@ -107,48 +107,44 @@ export class MediaComparator {
     return representatives;
   }
 
-  private sortEntries<T>(entries: T[], selector: (node: T) => FileInfo): T[] {
-    return entries.sort((a, b) => {
-      const aInfo = selector(a);
-      const bInfo = selector(b);
+  private scoreEntries<T>(entries: T[], selector: (node: T) => FileInfo): T[] {
+    const scoredEntries = entries.map((entry) => ({
+      entry,
+      score: this.calculateEntryScore(selector(entry)),
+    }));
 
-      // 1. Prioritize files with longer effective frames
-      if (aInfo.effectiveFrames !== bInfo.effectiveFrames) {
-        return bInfo.effectiveFrames - aInfo.effectiveFrames;
-      }
+    return scoredEntries
+      .sort((a, b) => b.score - a.score)
+      .map((scored) => scored.entry);
+  }
 
-      // 2. Prioritize files with longer duration
-      if (aInfo.duration !== bInfo.duration) {
-        return bInfo.duration - aInfo.duration;
-      }
+  calculateEntryScore(fileInfo: FileInfo): number {
+    let score = 0;
 
-      // 3. Prioritize files with image date
-      if (!!aInfo.imageDate !== !!bInfo.imageDate) {
-        return aInfo.imageDate ? -1 : 1;
-      }
+    // Significantly prioritize videos over images
+    if (fileInfo.effectiveFrames > 0) {
+      score += 10000; // Greatly increased base score for being a video
+    }
 
-      // 4. Prioritize files with image geo
-      if (!!aInfo.geoLocation !== !!bInfo.geoLocation) {
-        return aInfo.geoLocation ? -1 : 1;
-      }
+    // Score for duration (log scale to not overemphasize long durations)
+    score += Math.log(fileInfo.duration + 1) * 100; // Increased impact of duration
 
-      // 5. Prioritize files with image camera model
-      if (!!aInfo.cameraModel !== !!bInfo.cameraModel) {
-        return aInfo.cameraModel ? -1 : 1;
-      }
+    // Metadata scores
+    if (fileInfo.imageDate) score += 2000; // High importance, but less than being a video
+    if (fileInfo.geoLocation) score += 300;
+    if (fileInfo.cameraModel) score += 200;
 
-      // 6. Prioritize files with high quality
-      if (aInfo.quality !== bInfo.quality) {
-        return bInfo.quality - aInfo.quality;
-      }
+    // Quality score (adjusted to be more representative)
+    if (fileInfo.quality) {
+      // Assuming quality is width * height
+      // This gives 100 points for a 1000x1000 image/video
+      score += Math.sqrt(fileInfo.quality);
+    }
 
-      // 7. Prioritize files with larger size
-      if (aInfo.size !== bInfo.size) {
-        return bInfo.size - aInfo.size;
-      }
+    // Size score (small bonus for larger files)
+    score += Math.log(fileInfo.size) * 5;
 
-      return 0;
-    });
+    return score;
   }
 
   cluster<T>(nodes: T[], selector: (node: T) => FileInfo): T[][] {
