@@ -1,26 +1,24 @@
 import { MaxHeap } from "@datastructures-js/heap";
 
-interface VPNode {
-  vantagePoint: Buffer;
+interface VPNode<T> {
+  point: T;
   threshold: number;
-  left: VPNode | null;
-  right: VPNode | null;
-  identifier: string;
+  left: VPNode<T> | null;
+  right: VPNode<T> | null;
 }
 
-export class VPTree {
-  private root: VPNode | null = null;
+export class VPTree<T> {
+  private root: VPNode<T> | null = null;
 
   constructor(
-    points: { hash: Buffer; identifier: string }[],
+    points: T[],
+    private selectVector: (point: T) => Buffer,
     private distance: (a: Buffer, b: Buffer) => number,
   ) {
     this.root = this.buildSubtree(points);
   }
 
-  private buildSubtree(
-    points: { hash: Buffer; identifier: string }[],
-  ): VPNode | null {
+  private buildSubtree(points: T[]): VPNode<T> | null {
     if (points.length === 0) return null;
 
     const vantagePointIndex = Math.floor(Math.random() * points.length);
@@ -28,17 +26,19 @@ export class VPTree {
 
     if (points.length === 0) {
       return {
-        vantagePoint: vantagePoint.hash,
+        point: vantagePoint,
         threshold: 0,
         left: null,
         right: null,
-        identifier: vantagePoint.identifier,
       };
     }
 
     const distances = points.map((p) => ({
       point: p,
-      distance: this.distance(vantagePoint.hash, p.hash),
+      distance: this.distance(
+        this.selectVector(vantagePoint),
+        this.selectVector(p),
+      ),
     }));
 
     distances.sort((a, b) => a.distance - b.distance);
@@ -50,20 +50,22 @@ export class VPTree {
     const rightPoints = distances.slice(medianIndex).map((d) => d.point);
 
     return {
-      vantagePoint: vantagePoint.hash,
+      point: vantagePoint,
       threshold,
       left: this.buildSubtree(leftPoints),
       right: this.buildSubtree(rightPoints),
-      identifier: vantagePoint.identifier,
     };
   }
 
-  nearestNeighbors(query: Buffer, options: SearchOptions = {}): SearchResult[] {
+  nearestNeighbors(
+    query: Buffer,
+    options: SearchOptions = {},
+  ): SearchResult<T>[] {
     const k = options.k || Infinity;
     const maxDistance = options.distance || Infinity;
 
     // Use the MaxHeap with a custom comparator based on the distance
-    const maxHeap = new MaxHeap<SearchResult>((result) => result.distance);
+    const maxHeap = new MaxHeap<SearchResult<T>>((result) => result.distance);
 
     this.search(this.root, query, k, maxDistance, maxHeap);
 
@@ -72,20 +74,20 @@ export class VPTree {
   }
 
   private search(
-    node: VPNode | null,
+    node: VPNode<T> | null,
     query: Buffer,
     k: number,
     maxDistance: number,
-    maxHeap: MaxHeap<SearchResult>,
+    maxHeap: MaxHeap<SearchResult<T>>,
   ): void {
     if (node === null) return;
 
-    const dist = this.distance(query, node.vantagePoint);
+    const dist = this.distance(query, this.selectVector(node.point));
 
     // If the current point is within the distance threshold
     if (dist <= maxDistance) {
       if (maxHeap.size() < k || dist < maxHeap.top()!.distance) {
-        maxHeap.push({ identifier: node.identifier, distance: dist });
+        maxHeap.push({ node: node.point, distance: dist });
 
         // If we have more than k results, remove the farthest one
         if (maxHeap.size() > k) {
@@ -120,7 +122,7 @@ interface SearchOptions {
   distance?: number;
 }
 
-export interface SearchResult {
-  identifier: string;
+export interface SearchResult<T> {
+  node: T;
   distance: number;
 }

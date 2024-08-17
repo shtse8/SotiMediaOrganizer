@@ -1,12 +1,13 @@
-import { ExifDate, ExifDateTime, ExifTool, type Tags } from "exiftool-vendored";
-import type {
-  FileInfo,
-  DuplicateSet,
-  DeduplicationResult,
-  Stats,
-  GatherFileInfoResult,
+import { ExifDate, ExifDateTime } from "exiftool-vendored";
+import {
+  type FileInfo,
+  type DeduplicationResult,
+  type Stats,
+  type GatherFileInfoResult,
+  type PathEntry,
+  type ProcessingConfig,
+  FileType,
 } from "./types";
-import { VPTree } from "./VPTree";
 import { mkdir, copyFile, rename, unlink } from "fs/promises";
 import { join, basename, dirname, extname, parse } from "path";
 import { existsSync } from "fs";
@@ -19,97 +20,59 @@ import { readdir } from "fs/promises";
 import { stat } from "fs/promises";
 import { createHash, type Hash } from "crypto";
 import { createReadStream } from "fs";
-import sharp from "sharp";
-import ffmpeg from "fluent-ffmpeg";
 import path from "path";
 import { Spinner } from "@topcli/spinner";
-import { open, RootDatabase } from "lmdb";
+import { Database, open, RootDatabase } from "lmdb";
+import type { MediaComparator } from "./MediaComparator";
+import { MediaProcessor } from "./MediaProcessor";
 
-enum FileType {
-  Image,
-  Video,
-}
 export class MediaOrganizer {
-  static readonly SUPPORTED_EXTENSIONS = {
-    [FileType.Image]: new Set([
-      "jpg",
-      "jpeg",
-      "jpe",
-      "jif",
-      "jfif",
-      "jfi",
-      "jp2",
-      "j2c",
-      "jpf",
-      "jpx",
-      "jpm",
-      "mj2",
-      "png",
-      "gif",
-      "webp",
-      "tif",
-      "tiff",
-      "bmp",
-      "dib",
-      "heic",
-      "heif",
-      "avif",
-      "cr2",
-      "cr3",
-      "nef",
-      "nrw",
-      "arw",
-      "srf",
-      "sr2",
-      "dng",
-      "orf",
-      "ptx",
-      "pef",
-      "rw2",
-      "raf",
-      "raw",
-      "x3f",
-      "srw",
-    ]),
-    [FileType.Video]: new Set([
-      "mp4",
-      "m4v",
-      "mov",
-      "3gp",
-      "3g2",
-      "avi",
-      "mpg",
-      "mpeg",
-      "mpe",
-      "mpv",
-      "m2v",
-      "m2p",
-      "m2ts",
-      "mts",
-      "ts",
-      "qt",
-      "wmv",
-      "asf",
-      "flv",
-      "f4v",
-      "webm",
-      "divx",
-    ]),
-  };
-
-  static readonly ALL_SUPPORTED_EXTENSIONS = new Set([
-    ...MediaOrganizer.SUPPORTED_EXTENSIONS[FileType.Image],
-    ...MediaOrganizer.SUPPORTED_EXTENSIONS[FileType.Video],
-  ]);
-
-  private exiftool: ExifTool = new ExifTool();
   private db: RootDatabase;
+  private fileInfoDb: Database;
+  private pathDb: Database;
 
-  constructor(dbPath: string = ".mediadb") {
+  constructor(
+    private processor: MediaProcessor,
+    private comparator: MediaComparator,
+    dbPath: string = ".mediadb",
+  ) {
     this.db = open({
       path: dbPath,
       compression: true,
     });
+    this.fileInfoDb = this.db.openDB<FileInfo>({ name: "fileInfo" });
+    this.pathDb = this.db.openDB<PathEntry>({ name: "paths" });
+  }
+
+  private getConfigHash(config: ProcessingConfig): string {
+    return createHash("md5").update(JSON.stringify(config)).digest("hex");
+  }
+
+  private getFileInfoKey(fileHash: Buffer, config: ProcessingConfig): string {
+    return `${fileHash.toString("hex")}-${this.getConfigHash(config)}`;
+  }
+
+  async getFileInfo(
+    filePath: string,
+    config: ProcessingConfig,
+  ): Promise<FileInfo | undefined> {
+    const pathEntry = await this.pathDb.get(filePath);
+    if (!pathEntry) return undefined;
+    const fileInfoKey = this.getFileInfoKey(pathEntry.hash, config);
+    return this.fileInfoDb.get(fileInfoKey);
+  }
+
+  async setFileInfo(
+    filePath: string,
+    fileInfo: FileInfo,
+    fileDate: Date,
+  ): Promise<void> {
+    const fileInfoKey = this.getFileInfoKey(
+      fileInfo.hash,
+      fileInfo.processingConfig,
+    );
+    await this.fileInfoDb.put(fileInfoKey, fileInfo);
+    await this.pathDb.put(filePath, { hash: fileInfo.hash, fileDate });
   }
 
   async discoverFiles(
@@ -119,7 +82,6 @@ export class MediaOrganizer {
     const allFiles: string[] = [];
     let dirCount = 0;
     let fileCount = 0;
-    const startTime = Date.now();
     const semaphore = new Semaphore(concurrency);
     const spinner = new Spinner().start("Discovering files...");
 
@@ -133,7 +95,7 @@ export class MediaOrganizer {
           if (entry.isDirectory()) {
             semaphore.runExclusive(() => scanDirectory(entryPath));
           } else if (
-            MediaOrganizer.ALL_SUPPORTED_EXTENSIONS.has(
+            MediaProcessor.ALL_SUPPORTED_EXTENSIONS.has(
               path.extname(entry.name).slice(1).toLowerCase(),
             )
           ) {
@@ -154,10 +116,8 @@ export class MediaOrganizer {
 
     await semaphore.waitForUnlock(concurrency);
 
-    const duration = (Date.now() - startTime) / 1000;
-
     spinner.succeed(
-      `Discovery completed in ${duration.toFixed(2)} seconds: Found ${fileCount} files in ${dirCount} directories`,
+      `Discovery completed in ${(spinner.elapsedTime / 1000).toFixed(2)} seconds: Found ${fileCount} files in ${dirCount} directories`,
     );
 
     // print file format statistics
@@ -202,8 +162,6 @@ export class MediaOrganizer {
 
   async gatherFileInfo(
     files: string[],
-    resolution: number,
-    frameCount: number,
     concurrency: number = 10,
   ): Promise<GatherFileInfoResult> {
     const formatStats = new Map<string, Stats>();
@@ -219,7 +177,6 @@ export class MediaOrganizer {
         etaBuffer: 1000,
         barsize: 15,
         etaAsynchronousUpdate: true,
-
         format: (options, params, payload) => {
           const barSize = options.barsize || 10;
 
@@ -252,7 +209,18 @@ export class MediaOrganizer {
             timeInfo = `Time: ${chalk.yellow(duration.padStart(8))}`;
           }
 
-          return `${chalk.white(payload.format.padEnd(6))} ${bar} ${chalk.green(percentage.padStart(6))}% | ${chalk.cyan(payload.processedCount.toString().padStart(5))}/${chalk.cyan(payload.totalCount.toString().padStart(5))} | ${timeInfo} | ${chalk.magenta(payload.withImageDateCount.toString().padStart(5))} w/date | ${chalk.magenta(payload.withCameraCount.toString().padStart(5))} w/camera | ${chalk.magenta(payload.withGeoCount.toString().padStart(5))} w/geo | ${chalk.red(payload.errorCount.toString().padStart(5))} errors | ${chalk.yellow(payload.cachedCount.toString().padStart(5))} cached`;
+          const stats = payload.stats as Stats;
+
+          return (
+            `${chalk.white(payload.format.padEnd(6))} ${bar} ${chalk.green(percentage.padStart(6))}% | ` +
+            `${chalk.cyan(params.value.toString().padStart(7))}/${chalk.cyan(params.total.toString().padStart(7))} | ` +
+            `${timeInfo} | ` +
+            `${chalk.magenta(stats.withImageDateCount.toString().padStart(5))} w/date | ` +
+            `${chalk.magenta(stats.withCameraCount.toString().padStart(5))} w/camera | ` +
+            `${chalk.magenta(stats.withGeoCount.toString().padStart(5))} w/geo | ` +
+            `${chalk.red(stats.errorCount.toString().padStart(5))} errors | ` +
+            `${chalk.yellow(stats.cachedCount.toString().padStart(5))} cached`
+          );
         },
       },
       cliProgress.Presets.shades_classic,
@@ -262,7 +230,7 @@ export class MediaOrganizer {
     const filesByFormat = new Map<string, string[]>();
     for (const file of files) {
       const ext = path.extname(file).slice(1).toLowerCase();
-      if (MediaOrganizer.ALL_SUPPORTED_EXTENSIONS.has(ext)) {
+      if (MediaProcessor.ALL_SUPPORTED_EXTENSIONS.has(ext)) {
         filesByFormat.set(ext, filesByFormat.get(ext) ?? []);
         filesByFormat.get(ext)!.push(file);
       }
@@ -280,8 +248,6 @@ export class MediaOrganizer {
       const formatFiles = filesByFormat.get(format)!;
 
       const stats: Stats = {
-        totalCount: formatFiles.length,
-        processedCount: 0,
         withGeoCount: 0,
         withImageDateCount: 0,
         withCameraCount: 0,
@@ -290,9 +256,9 @@ export class MediaOrganizer {
       };
       formatStats.set(format, stats);
 
-      const bar = multibar.create(stats.totalCount, 0, {
+      const bar = multibar.create(formatFiles.length, 0, {
         format,
-        ...stats,
+        stats,
       });
       bars.set(format, bar);
     }
@@ -302,22 +268,29 @@ export class MediaOrganizer {
       const formatFiles = filesByFormat.get(format)!;
       const stats = formatStats.get(format)!;
       const bar = bars.get(format)!;
-      bar.start(stats.totalCount, 0, {
+      bar.start(bar.getTotal(), 0, {
         format,
-        ...stats,
+        stats: stats,
       });
 
       for (const file of formatFiles) {
         await semaphore.waitForUnlock();
         semaphore.runExclusive(async () => {
           try {
-            let fileInfo: FileInfo | undefined = await this.db.get(file);
-
-            if (fileInfo) {
+            let fileInfo = await this.getFileInfo(file, this.processor.config);
+            if (
+              fileInfo &&
+              this.isConfigMatch(
+                fileInfo.processingConfig,
+                this.processor.config,
+              )
+            ) {
               stats.cachedCount++;
             } else {
-              fileInfo = await this.getFileInfo(file, resolution, frameCount);
-              await this.db.put(file, fileInfo);
+              const hash = await this.processor.calculateFileHash(file);
+              fileInfo = await this.processor.processFile(file, hash);
+              const fileStat = await stat(file);
+              await this.setFileInfo(file, fileInfo, fileStat.mtime);
             }
 
             if (fileInfo.geoLocation) stats.withGeoCount++;
@@ -328,8 +301,7 @@ export class MediaOrganizer {
             stats.errorCount++;
             errorFiles.push(file);
           } finally {
-            stats.processedCount++;
-            bar.update(stats.processedCount, stats);
+            bar.increment();
           }
         });
       }
@@ -341,161 +313,125 @@ export class MediaOrganizer {
     return { validFiles, errorFiles };
   }
 
-  async deduplicateFiles(
-    files: string[],
-    resolution: number,
-    frameCount: number,
-    similarity: number,
-  ): Promise<DeduplicationResult> {
-    const imageFiles: string[] = [];
-    const videoFiles: string[] = [];
-
-    // Separate image and video files
-    for (const path of files) {
-      const fileType = MediaOrganizer.getFileType(path);
-      if (fileType === FileType.Image) {
-        imageFiles.push(path);
-      } else if (fileType === FileType.Video) {
-        videoFiles.push(path);
-      }
-    }
-
-    const [imageResult, videoResult] = await Promise.all([
-      this.deduplicateFileType(
-        imageFiles,
-        resolution,
-        1,
-        similarity,
-        FileType.Image,
-      ),
-      this.deduplicateFileType(
-        videoFiles,
-        resolution,
-        frameCount,
-        similarity,
-        FileType.Video,
-      ),
-    ]);
-
-    // Combine results
-    return {
-      uniqueFiles: new Set([
-        ...imageResult.uniqueFiles,
-        ...videoResult.uniqueFiles,
-      ]),
-      duplicateSets: new Map([
-        ...imageResult.duplicateSets,
-        ...videoResult.duplicateSets,
-      ]),
-    };
+  private isConfigMatch(
+    config1: ProcessingConfig,
+    config2: ProcessingConfig,
+  ): boolean {
+    return (
+      config1.resolution === config2.resolution &&
+      config1.framesPerSecond === config2.framesPerSecond &&
+      config1.maxFrames === config2.maxFrames
+    );
   }
 
-  private async deduplicateFileType(
-    files: string[],
-    resolution: number,
-    frameCount: number,
-    similarity: number,
-    fileType: FileType,
-  ): Promise<DeduplicationResult> {
-    const spinner = new Spinner().start(
-      `Deduplicating ${files.length} files...`,
-      {
-        withPrefix: fileType === FileType.Image ? "Image " : "Video ",
-      },
-    );
+  async deduplicateFiles(files: string[]): Promise<DeduplicationResult> {
+    const spinner = new Spinner().start("Deduplicating files...");
 
-    const uniqueFiles = new Set<string>();
-    const duplicateSets = new Map<string, DuplicateSet>();
-    const hashLength = resolution * resolution * frameCount;
-    const hammingThreshold = Math.floor(hashLength * (1 - similarity));
-
-    // Create VPTree
-    const points = await Promise.all(
-      files.map(async (path) => {
-        const fileInfo = await this.db.get(path);
-        if (!fileInfo) {
-          throw new Error(`File info not found for file ${path}`);
-        }
-        return {
-          hash: fileInfo.perceptualHash!,
-          identifier: path,
-        };
-      }),
-    );
-    const vpTree = new VPTree(points, this.hammingDistance.bind(this));
-
-    // Perform deduplication using VPTree traversal
-    const processed = new Set<string>();
-
-    for (const path of files) {
-      if (processed.has(path)) continue;
-
-      const fileInfo = await this.db.get(path);
-
-      const neighbors = vpTree.nearestNeighbors(fileInfo.perceptualHash!, {
-        distance: hammingThreshold,
-      });
-
-      if (neighbors.length > 1) {
-        // Found duplicates
-        const duplicateGroup = neighbors.map((n) => n.identifier);
-        const bestFile = await this.selectBestFile(duplicateGroup);
-        const duplicateSet: DuplicateSet = {
-          bestFile: bestFile,
-          duplicates: new Set(duplicateGroup.filter((p) => p !== bestFile)),
-        };
-        duplicateSets.set(bestFile, duplicateSet);
-        duplicateGroup.forEach((p) => processed.add(p));
-      } else {
-        // Unique file
-        uniqueFiles.add(path);
-        processed.add(path);
+    const fileInfoMap = new Map<string, FileInfo>();
+    for (const file of files) {
+      const fileInfo = await this.getFileInfo(file, this.processor.config);
+      if (!fileInfo) {
+        throw new Error(`File info not found for file ${file}`);
       }
+      fileInfoMap.set(file, fileInfo);
     }
 
-    spinner.succeed(
-      `Deduplication completed: Found ${duplicateSets.size} duplicate sets, ${Array.from(duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)} duplicates`,
+    const { uniqueFiles, duplicateSets } = this.comparator.deduplicateFiles(
+      files,
+      (file) => fileInfoMap.get(file)!,
     );
+
+    const duplicateCount = duplicateSets.reduce(
+      (sum, set) => sum + set.duplicates.size,
+      0,
+    );
+    spinner.succeed(
+      `Deduplication completed in ${(spinner.elapsedTime / 1000).toFixed(2)} seconds: Found ${duplicateSets.length} duplicate sets, ${uniqueFiles.size} unique files, ${duplicateCount} duplicates`,
+    );
+
+    // print top 5 duplicate sets
+    const featuredDuplicates = duplicateSets
+      .sort(
+        (a, b) =>
+          b.duplicates.size +
+          b.representatives.size -
+          a.duplicates.size -
+          a.representatives.size,
+      )
+      .slice(0, 5);
+
+    console.log(chalk.blue("\nTop 5 Duplicate Sets:"));
+    if (featuredDuplicates.length === 0) {
+      console.log(chalk.white("No duplicate sets found"));
+    }
+    for (let i = 0; i < featuredDuplicates.length; i++) {
+      const duplicateSet = featuredDuplicates[i];
+      console.log(
+        chalk.white(`Duplicate Set ${i + 1}: ${duplicateSet.bestFile}`),
+      );
+      console.log(
+        chalk.white(`  ${duplicateSet.representatives.size} representatives`),
+      );
+      console.log(chalk.white(`  ${duplicateSet.duplicates.size} duplicates`));
+    }
+
+    // print mixed format duplicate sets
+    const mixedFormatDuplicates = duplicateSets
+      .filter((set) => {
+        const files = Array.from(set.representatives).concat(
+          Array.from(set.duplicates),
+        );
+        const formats = new Set(
+          files.map((file) => MediaOrganizer.getFileType(file)),
+        );
+        return formats.size > 1;
+      })
+      .sort(
+        (a, b) =>
+          b.duplicates.size +
+          b.representatives.size -
+          a.duplicates.size -
+          a.representatives.size,
+      )
+      .slice(0, 5);
+
+    console.log(chalk.blue("\nTop 5 Mixed Format Duplicate Sets:"));
+    if (mixedFormatDuplicates.length === 0) {
+      console.log(chalk.white("No mixed format duplicate sets found"));
+    }
+    for (let i = 0; i < mixedFormatDuplicates.length; i++) {
+      const duplicateSet = mixedFormatDuplicates[i];
+      console.log(
+        chalk.white(`Duplicate Set ${i + 1}: ${duplicateSet.bestFile}`),
+      );
+      console.log(
+        chalk.white(`  ${duplicateSet.representatives.size} representatives`),
+      );
+      console.log(chalk.white(`  ${duplicateSet.duplicates.size} duplicates`));
+    }
+
+    // print multiple representative duplicate sets
+    const multipleRepresentatives = duplicateSets.filter(
+      (set) => set.representatives.size > 1,
+    );
+    console.log(chalk.blue("\nDuplicate Sets with Multiple Representatives:"));
+    if (multipleRepresentatives.length === 0) {
+      console.log(
+        chalk.white("No duplicate sets with multiple representatives found"),
+      );
+    }
+    for (let i = 0; i < multipleRepresentatives.length; i++) {
+      const duplicateSet = multipleRepresentatives[i];
+      console.log(
+        chalk.white(`Duplicate Set ${i + 1}: ${duplicateSet.bestFile}`),
+      );
+      console.log(
+        chalk.white(`  ${duplicateSet.representatives.size} representatives`),
+      );
+      console.log(chalk.white(`  ${duplicateSet.duplicates.size} duplicates`));
+    }
 
     return { uniqueFiles, duplicateSets };
-  }
-
-  private hammingDistance(hash1: Buffer, hash2: Buffer): number {
-    let distance = 0;
-    for (let i = 0; i < hash1.length; i++) {
-      distance += this.popcount(hash1[i] ^ hash2[i]);
-    }
-    return distance;
-  }
-
-  private popcount(x: number): number {
-    // Counts the number of set bits (1s) in a binary representation of the number
-    x -= (x >> 1) & 0x55555555;
-    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
-    x = (x + (x >> 4)) & 0x0f0f0f0f;
-    x += x >> 8;
-    x += x >> 16;
-    return x & 0x7f;
-  }
-
-  private async selectBestFile(files: string[]): Promise<string> {
-    const fileInfos = await Promise.all(files.map((file) => this.db.get(file)));
-    if (fileInfos.some((info) => !info)) {
-      throw new Error("File info not found");
-    }
-    return fileInfos.reduce((best, current) => {
-      if (current.imageDate && !best.imageDate) return current;
-      if (best.imageDate && !current.imageDate) return best;
-      if (current.geoLocation && !best.geoLocation) return current;
-      if (best.geoLocation && !current.geoLocation) return best;
-      if (current.cameraModel && !best.cameraModel) return current;
-      if (best.cameraModel && !current.cameraModel) return best;
-      if (current.quality !== undefined && best.quality !== undefined) {
-        if (current.quality > best.quality) return current;
-        if (best.quality > current.quality) return best;
-      }
-      return current.size > best.size ? current : best;
-    }).path;
   }
 
   async transferFiles(
@@ -524,20 +460,28 @@ export class MediaOrganizer {
     if (debugDir) {
       const debugCount = Array.from(
         deduplicationResult.duplicateSets.values(),
-      ).reduce((sum, set) => sum + set.duplicates.size + 1, 0);
+      ).reduce(
+        (sum, set) => sum + set.duplicates.size + set.representatives.size,
+        0,
+      );
       const debugBar = multibar.create(debugCount, 0, { phase: "Debug   " });
 
-      for (const [, duplicateSet] of deduplicationResult.duplicateSets) {
+      for (const duplicateSet of deduplicationResult.duplicateSets) {
         const bestFile = duplicateSet.bestFile;
         const duplicateFolderName = basename(bestFile, extname(bestFile));
         const debugSetFolder = join(debugDir, duplicateFolderName);
 
-        await this.transferOrCopyFile(
-          bestFile,
-          join(debugSetFolder, basename(bestFile)),
-          true,
-        );
-        debugBar.increment();
+        const representatives = duplicateSet.representatives;
+        for (const representativePath of representatives) {
+          // modify the filename to indicate it's a representative
+          const filename = "#" + basename(representativePath);
+          await this.transferOrCopyFile(
+            representativePath,
+            join(debugSetFolder, filename),
+            true,
+          );
+          debugBar.increment();
+        }
 
         for (const duplicatePath of duplicateSet.duplicates) {
           await this.transferOrCopyFile(
@@ -555,8 +499,18 @@ export class MediaOrganizer {
       phase: "Unique  ",
     });
     for (const filePath of deduplicationResult.uniqueFiles) {
-      const fileInfo = await this.db.get(filePath);
-      const targetPath = this.generateTargetPath(format, targetDir, fileInfo);
+      const pathEntry = await this.pathDb.get(filePath);
+      const fileInfo = await this.getFileInfo(filePath, this.processor.config);
+      if (!fileInfo) {
+        throw new Error(`File info not found for file ${filePath}`);
+      }
+      const targetPath = this.generateTargetPath(
+        format,
+        targetDir,
+        fileInfo,
+        pathEntry,
+        filePath,
+      );
       await this.transferOrCopyFile(filePath, targetPath, !shouldMove);
       uniqueBar.increment();
     }
@@ -570,7 +524,7 @@ export class MediaOrganizer {
         phase: "Duplicate",
       });
 
-      for (const [, duplicateSet] of deduplicationResult.duplicateSets) {
+      for (const duplicateSet of deduplicationResult.duplicateSets) {
         const bestFile = duplicateSet.bestFile;
         const duplicateFolderName = basename(bestFile, extname(bestFile));
         const duplicateSetFolder = join(duplicateDir, duplicateFolderName);
@@ -592,21 +546,39 @@ export class MediaOrganizer {
       );
     } else {
       // If no duplicateDir is specified, we still need to process (move or copy) the best files from each duplicate set
-      const bestFileBar = multibar.create(
-        deduplicationResult.duplicateSets.size,
-        0,
-        { phase: "Best File" },
-      );
-      for (const [, duplicateSet] of deduplicationResult.duplicateSets) {
-        const bestFile = duplicateSet.bestFile;
-        const bestFileInfo = await this.db.get(bestFile);
-        const targetPath = this.generateTargetPath(
-          format,
-          targetDir,
-          bestFileInfo,
-        );
-        await this.transferOrCopyFile(bestFile, targetPath, !shouldMove);
-        bestFileBar.increment();
+      const representativeCount = Array.from(
+        deduplicationResult.duplicateSets.values(),
+      ).reduce((sum, set) => sum + set.representatives.size, 0);
+      const bestFileBar = multibar.create(representativeCount, 0, {
+        phase: "Best File",
+      });
+      for (const duplicateSet of deduplicationResult.duplicateSets) {
+        const representatives = duplicateSet.representatives;
+        for (const representativePath of representatives) {
+          const pathEntry = await this.pathDb.get(representativePath);
+          const fileInfo = await this.getFileInfo(
+            representativePath,
+            this.processor.config,
+          );
+          if (!fileInfo) {
+            throw new Error(
+              `File info not found for file ${representativePath}`,
+            );
+          }
+          const targetPath = this.generateTargetPath(
+            format,
+            targetDir,
+            fileInfo,
+            pathEntry,
+            representativePath,
+          );
+          await this.transferOrCopyFile(
+            representativePath,
+            targetPath,
+            !shouldMove,
+          );
+          bestFileBar.increment();
+        }
       }
     }
 
@@ -626,7 +598,7 @@ export class MediaOrganizer {
 
     multibar.stop();
     console.log(chalk.green("\nFile transfer completed"));
-    if (debugDir && deduplicationResult.duplicateSets.size > 0) {
+    if (debugDir && deduplicationResult.duplicateSets.length > 0) {
       console.log(
         chalk.yellow(
           `Debug mode: All files in duplicate sets have been copied to ${debugDir} for verification.`,
@@ -642,7 +614,7 @@ export class MediaOrganizer {
 
   static getFileTypeByExt(ext: string): FileType {
     for (const fileType of [FileType.Image, FileType.Video]) {
-      if (MediaOrganizer.SUPPORTED_EXTENSIONS[fileType].has(ext)) {
+      if (MediaProcessor.SUPPORTED_EXTENSIONS[fileType].has(ext)) {
         return fileType;
       }
     }
@@ -680,9 +652,11 @@ export class MediaOrganizer {
     format: string,
     targetDir: string,
     fileInfo: FileInfo,
+    pathEntry: PathEntry,
+    sourcePath: string,
   ): string {
-    const mixedDate = fileInfo.imageDate || fileInfo.fileDate;
-    const { name, ext } = parse(fileInfo.path);
+    const mixedDate = fileInfo.imageDate || pathEntry.fileDate;
+    const { name, ext } = parse(sourcePath);
 
     function generateRandomId(): string {
       return crypto.randomBytes(4).toString("hex");
@@ -711,27 +685,27 @@ export class MediaOrganizer {
       "I.A": this.formatDate(fileInfo.imageDate, "A"),
       "I.WW": this.formatDate(fileInfo.imageDate, "WW"),
 
-      "F.YYYY": this.formatDate(fileInfo.fileDate, "YYYY"),
-      "F.YY": this.formatDate(fileInfo.fileDate, "YY"),
-      "F.MMMM": this.formatDate(fileInfo.fileDate, "MMMM"),
-      "F.MMM": this.formatDate(fileInfo.fileDate, "MMM"),
-      "F.MM": this.formatDate(fileInfo.fileDate, "MM"),
-      "F.M": this.formatDate(fileInfo.fileDate, "M"),
-      "F.DD": this.formatDate(fileInfo.fileDate, "DD"),
-      "F.D": this.formatDate(fileInfo.fileDate, "D"),
-      "F.DDDD": this.formatDate(fileInfo.fileDate, "DDDD"),
-      "F.DDD": this.formatDate(fileInfo.fileDate, "DDD"),
-      "F.HH": this.formatDate(fileInfo.fileDate, "HH"),
-      "F.H": this.formatDate(fileInfo.fileDate, "H"),
-      "F.hh": this.formatDate(fileInfo.fileDate, "hh"),
-      "F.h": this.formatDate(fileInfo.fileDate, "h"),
-      "F.mm": this.formatDate(fileInfo.fileDate, "mm"),
-      "F.m": this.formatDate(fileInfo.fileDate, "m"),
-      "F.ss": this.formatDate(fileInfo.fileDate, "ss"),
-      "F.s": this.formatDate(fileInfo.fileDate, "s"),
-      "F.a": this.formatDate(fileInfo.fileDate, "a"),
-      "F.A": this.formatDate(fileInfo.fileDate, "A"),
-      "F.WW": this.formatDate(fileInfo.fileDate, "WW"),
+      "F.YYYY": this.formatDate(pathEntry.fileDate, "YYYY"),
+      "F.YY": this.formatDate(pathEntry.fileDate, "YY"),
+      "F.MMMM": this.formatDate(pathEntry.fileDate, "MMMM"),
+      "F.MMM": this.formatDate(pathEntry.fileDate, "MMM"),
+      "F.MM": this.formatDate(pathEntry.fileDate, "MM"),
+      "F.M": this.formatDate(pathEntry.fileDate, "M"),
+      "F.DD": this.formatDate(pathEntry.fileDate, "DD"),
+      "F.D": this.formatDate(pathEntry.fileDate, "D"),
+      "F.DDDD": this.formatDate(pathEntry.fileDate, "DDDD"),
+      "F.DDD": this.formatDate(pathEntry.fileDate, "DDD"),
+      "F.HH": this.formatDate(pathEntry.fileDate, "HH"),
+      "F.H": this.formatDate(pathEntry.fileDate, "H"),
+      "F.hh": this.formatDate(pathEntry.fileDate, "hh"),
+      "F.h": this.formatDate(pathEntry.fileDate, "h"),
+      "F.mm": this.formatDate(pathEntry.fileDate, "mm"),
+      "F.m": this.formatDate(pathEntry.fileDate, "m"),
+      "F.ss": this.formatDate(pathEntry.fileDate, "ss"),
+      "F.s": this.formatDate(pathEntry.fileDate, "s"),
+      "F.a": this.formatDate(pathEntry.fileDate, "a"),
+      "F.A": this.formatDate(pathEntry.fileDate, "A"),
+      "F.WW": this.formatDate(pathEntry.fileDate, "WW"),
 
       "D.YYYY": this.formatDate(mixedDate, "YYYY"),
       "D.YY": this.formatDate(mixedDate, "YY"),
@@ -853,64 +827,6 @@ export class MediaOrganizer {
     return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
   }
 
-  async cleanup() {
-    await this.exiftool.end();
-  }
-
-  private async getFileInfo(
-    filePath: string,
-    resolution: number,
-    frameCount: number,
-  ): Promise<FileInfo> {
-    const fileTypeInfo = MediaOrganizer.getFileType(filePath);
-    let perceptualHashPromise: Promise<Buffer>;
-    switch (fileTypeInfo) {
-      case FileType.Image:
-        perceptualHashPromise = this.getImagePerceptualHash(
-          filePath,
-          resolution,
-        );
-        break;
-      case FileType.Video:
-        perceptualHashPromise = this.getVideoPerceptualHash(
-          filePath,
-          frameCount,
-          resolution,
-        );
-        break;
-      default:
-        throw new Error("Unsupported file type for file " + filePath);
-    }
-
-    const [fileStat, hash, metadata, perceptualHash] = await Promise.all([
-      stat(filePath),
-      this.calculateFileHash(filePath),
-      this.getMetadata(filePath),
-      perceptualHashPromise,
-    ]);
-
-    const imageDate =
-      this.toDate(metadata.DateTimeOriginal) ??
-      this.toDate(metadata.MediaCreateDate);
-
-    const fileInfo: FileInfo = {
-      path: filePath,
-      size: fileStat.size,
-      hash,
-      imageDate: imageDate,
-      fileDate: fileStat.mtime,
-      perceptualHash: perceptualHash,
-      quality: (metadata.ImageHeight ?? 0) * (metadata.ImageWidth ?? 0),
-      geoLocation:
-        metadata.GPSLatitude && metadata.GPSLongitude
-          ? `${metadata.GPSLatitude},${metadata.GPSLongitude}`
-          : undefined,
-      cameraModel: metadata.Model,
-    };
-
-    return fileInfo;
-  }
-
   private async calculateFileHash(
     filePath: string,
     maxChunkSize = 1024 * 1024,
@@ -943,88 +859,6 @@ export class MediaOrganizer {
       stream.on("data", (chunk: Buffer) => hash.update(chunk));
       stream.on("end", resolve);
       stream.on("error", reject);
-    });
-  }
-
-  private getMetadata(path: string): Promise<Tags> {
-    return this.exiftool.read(path);
-  }
-
-  private async getImagePerceptualHash(
-    filePath: string,
-    resolution: number,
-  ): Promise<Buffer> {
-    const image = sharp(filePath, { failOnError: true });
-
-    try {
-      const perceptualHashData = await image
-        .resize(resolution, resolution, { fit: "fill" })
-        .greyscale()
-        .raw()
-        .toBuffer({ resolveWithObject: false });
-
-      return this.getPerceptualHash(perceptualHashData, resolution);
-    } finally {
-      image.destroy();
-    }
-  }
-
-  private getVideoPerceptualHash(
-    filePath: string,
-    numFrames: number = 10,
-    resolution: number = 8,
-  ): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(filePath, (err, metadata) => {
-        if (err) {
-          return reject(err);
-        }
-
-        const duration = metadata.format.duration;
-        if (!duration) {
-          return reject(new Error("Could not determine video duration."));
-        }
-
-        const interval = Math.max(1, duration / (numFrames + 1));
-        const frameBuffers: Buffer[] = [];
-
-        ffmpeg(filePath)
-          .on("error", (err) => {
-            return reject(err);
-          })
-          .on("end", async () => {
-            try {
-              if (frameBuffers.length <= 0) {
-                return reject(new Error("No frames extracted from video."));
-              }
-              const combinedHash = await this.combineFrameHashes(
-                frameBuffers,
-                resolution,
-                numFrames,
-              );
-              resolve(combinedHash);
-            } catch (error) {
-              reject(error);
-            }
-          })
-          .videoFilters(
-            `select='(isnan(prev_selected_t)*gte(t\\,${interval}))+gte(t-prev_selected_t\\,${interval})',scale=${resolution}:${resolution},format=gray`,
-          )
-          .outputOptions(
-            "-vsync",
-            "vfr",
-            "-vcodec",
-            "rawvideo",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "gray",
-          )
-          .pipe()
-          .on("data", (chunk) => {
-            frameBuffers.push(chunk);
-          });
-      });
     });
   }
 
