@@ -1,19 +1,19 @@
 # SotiMediaOrganizer (SMO)
 
-**SotiMediaOrganizer** (SMO) is your ultimate solution for organizing and decluttering your digital photo and video collection. Whether you're a casual snapper or a professional photographer, SMO provides the tools you need to make sense of thousands of files—quickly, efficiently, and smartly.
+**SotiMediaOrganizer** (SMO) is your ultimate tool for organizing and decluttering your digital photo and video collection. Whether you're a casual photographer or a seasoned professional, SMO offers intelligent solutions to bring order to your growing media library, efficiently and effortlessly.
 
-## 🚀 Features at a Glance
+## 🚀 Key Features
 
-- **Intelligent Organization**: Automatically sorts your photos and videos based on metadata like creation date, geolocation, and camera model.
-- **Cutting-Edge Deduplication**: Detects and groups duplicates with precision using advanced algorithms such as MinHash, VP Tree, and DBSCAN.
-- **Performance First**: Optimized for both Windows and Ubuntu, leveraging powerful tools like Sharp and FFmpeg for downscaling, ensuring a fast and smooth experience.
-- **Customizable Directory Structure**: Tailor the organization to fit your style with a flexible format string system.
-- **Resume Anytime**: A robust caching mechanism ensures you can pause and resume deduplication at your convenience.
-- **HEIC and DNG Support**: Need to process HEIC or DNG files? No problem—just recompile libvips following their guidelines.
+- **Smart Organization**: Automatically organizes photos and videos by metadata like creation date, geolocation, and camera model.
+- **Advanced Deduplication**: Eliminate duplicate files with cutting-edge algorithms like MinHash, VP Tree, DBSCAN, and Dynamic Time Warping (DTW).
+- **Blazing Performance**: Optimized for speed with tools like Sharp and FFmpeg, ensuring smooth operation on both Windows and Ubuntu.
+- **Flexible Directory Structure**: Customize the folder hierarchy to fit your organizational style using an intuitive format string system.
+- **Pause and Resume**: Robust caching allows you to pause and resume deduplication tasks at any time.
+- **Wide Format Support**: Handle everything from JPEG to HEIC, and MP4 to DNG—just recompile libvips for specialized formats.
 
-## 🌟 Installation
+## 🌟 Easy Installation
 
-Install SMO globally with Bun:
+Get started with SMO in no time by installing it globally with Bun:
 
 ```bash
 bun install --global @sotilab/smo
@@ -21,9 +21,9 @@ bun install --global @sotilab/smo
 
 This command makes `smo` available directly from your terminal.
 
-## 🔥 Usage
+## 🔥 Simple and Powerful Usage
 
-Here’s how to get started with SMO. The command structure is designed to be intuitive and flexible:
+Start organizing your media with a single command:
 
 ```bash
 smo -s /path/to/source -t /path/to/target
@@ -32,22 +32,22 @@ smo -s /path/to/source -t /path/to/target
 ### Command Options
 
 - **Required:**
-  - `-s, --source <paths...>`: Source directories containing your media files.
-  - `-t, --target <path>`: Target directory where organized files will be stored.
+  - `-s, --source <paths...>`: Directories containing your media files.
+  - `-t, --target <path>`: Destination directory for organized files.
 - **Optional:**
-  - `-e, --error <path>`: Directory for files that couldn't be processed.
-  - `-d, --duplicate <path>`: Directory where duplicate files will be stored.
-  - `--debug <path>`: Directory for storing all files in duplicate sets for debugging purposes.
+  - `-e, --error <path>`: Folder for files that couldn’t be processed.
+  - `-d, --duplicate <path>`: Folder for storing duplicates.
+  - `--debug <path>`: Folder to keep all files in duplicate sets for debugging.
   - `-c, --concurrency <number>`: Number of workers to use (default: half of CPU cores).
-  - `-m, --move`: Move files instead of copying them.
+  - `-m, --move`: Move files instead of copying.
   - `-r, --resolution <number>`: Resolution for perceptual hashing (default: 64).
-  - `--frame-count <number>`: Number of frames to extract from videos for perceptual hashing (default: 5).
+  - `--frame-count <number>`: Number of frames to extract from videos (default: 5).
   - `-s, --similarity <number>`: Similarity threshold for perceptual hashing (default: 0.99).
-  - `-f, --format <string>`: Format for target directory structure.
+  - `-f, --format <string>`: Customize the folder structure for organized files.
 
-### Example
+### Example Usage
 
-Organize media from multiple source directories into a target directory with custom formats and duplicate handling:
+Organize media from multiple source directories into a neatly structured target directory with custom formats and duplicate handling:
 
 ```bash
 smo -s /media/photos /media/videos -t /organized/media -d /duplicates -e /errors --move --format "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}"
@@ -55,107 +55,80 @@ smo -s /media/photos /media/videos -t /organized/media -d /duplicates -e /errors
 
 ### Format String Placeholders
 
-SMO gives you the power to define how your files are organized with a rich set of placeholders:
+With SMO, you have full control over how your files are organized. Use these placeholders to define your folder structure:
 
-- **Image/Video Date (I., F., D.):**
+- **Date (Image/Video):**
   - `{*.YYYY}`: Year (4 digits)
   - `{*.MM}`: Month (2 digits)
   - `{*.DD}`: Day (2 digits)
   - `{*.HH}`: Hour (24h, 2 digits)
   - `{*.mm}`: Minute (2 digits)
-- **Filename:**
+- **File Information:**
   - `{NAME}`: Original filename (without extension)
   - `{EXT}`: File extension (without dot)
   - `{RND}`: Random 8-character hexadecimal string
-- **Other:**
+- **Additional Metadata:**
   - `{GEO}`: Geolocation
   - `{CAM}`: Camera model
-  - `{TYPE}`: 'Image' or 'Other'
+  - `{TYPE}`: 'Image' or 'Video'
 
-#### Example Formats:
+#### Sample Formats:
 
 ```bash
 "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}"
 "{HAS.GEO}/{D.YYYY}/{D.MM}/{NAME}_{D.HH}{D.mm}.{EXT}"
 ```
 
-## 🔍 Deduplication Explained
+## 🔍 Sophisticated Deduplication
 
-SMO’s deduplication process is a masterpiece of modern technology, designed to carefully analyze and group similar files while preserving important moments and discarding unnecessary duplicates.
+SMO’s deduplication process combines state-of-the-art technology with practical strategies to keep your media collection tidy:
 
-### How SMO Treats Videos and Images the Same
+### A Unified Approach
 
-SMO is built to handle both videos and images, treating them with the same level of care and precision during deduplication. This approach is essential because there are animated images (like GIFs) and one-frame videos (such as short clips) that need to be managed similarly to static images. This capability allows SMO to deduplicate across videos and images seamlessly, ensuring a cleaner and more organized media library.
+SMO treats videos and images equally, allowing it to detect duplicates across formats. By comparing raw frame buffers, SMO accurately identifies duplicates, even in transcoded videos or when an image is a captured moment from a video. Thanks to downscaling, differences in quality are also handled effectively.
 
-### 🏆 Selecting the Best Files from Clusters
+### Step-by-Step Deduplication
 
-SMO doesn’t just identify duplicates—it carefully selects the best files to keep. This process is essential because sometimes a video might capture the same moment as a photo, which you might want to preserve. Other times, those photos could just be thumbnails generated by software, which you don’t need. Here’s how SMO makes sure you only keep the files that matter most:
+1. **MinHash Signatures**: Generate unique signatures for each media file, capturing its essential visual features.
+2. **Hamming Distance**: Measure similarity by calculating the Hamming distance between MinHash signatures.
+3. **VP Tree Clustering**: Group similar media files using a VP Tree to streamline the deduplication process.
+4. **DBSCAN Refinement**: Further refine clusters using DBSCAN, ensuring only true duplicates are grouped together.
+5. **Dynamic Time Warping (DTW) & Window Sliding**: Compare sequences of frames using DTW and a sliding window technique, perfect for detecting when one video is a subset of another.
+6. **Smart File Selection**:
+   - **Prioritization**: Files are ranked by effective frames, duration, metadata, and quality.
+   - **Special Handling**:
+     - **Single-Frame Best**: If the best file is a single-frame entry, SMO compares all single-frame entries in the cluster to preserve meaningful captures.
+     - **Multi-Frame Best**: If the best file is multi-frame, SMO checks other single-frame entries for potential captures or thumbnails and re-runs deduplication to decide which files to keep.
 
-#### 🥇 Step 1: Prioritize Like a Pro
+### Supported Scenarios
 
-First, SMO sorts all the files in a cluster based on a series of criteria designed to pick the best possible file:
+| **Scenario**                                     | **Support Level** | **Details**                                                                                                                         |
+| ------------------------------------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Video is a subset of another video**           | **Supported**     | SMO detects when one video is a subset of another, even after transcoding, using DTW and window sliding techniques.                 |
+| **Different rotations of the same image**        | **Supported**     | Perceptual hashing and grayscale processing ensure that rotation differences are effectively managed.                               |
+| **Video duplicates images**                      | **Supported**     | SMO compares frames from both videos and images, identifying duplicates across these formats.                                       |
+| **One video transcoded in different qualities**  | **Supported**     | Downscaling and raw frame buffer comparison allow SMO to recognize duplicates across varying quality levels or transcoded versions. |
+| **Captured moments from video**                  | **Supported**     | SMO detects when an image is a captured moment from a video, ensuring meaningful files are preserved.                               |
+| **Thumbnails generated by software**             | **Supported**     | SMO re-runs deduplication within clusters to differentiate genuine captures from software-generated thumbnails.                     |
+| **Animated images (GIFs) vs. one-frame videos**  | **Supported**     | SMO treats videos and images equally, efficiently detecting duplicates even when formats differ.                                    |
+| **Duplicate detection in different resolutions** | **Supported**     | Downscaling ensures that resolution differences do not interfere with accurate duplicate detection.                                 |
 
-1. **Effective Frames**: Files with more effective frames (i.e., frames with meaningful content) are prioritized. This ensures that videos or animated images are favored over single-frame entries if they contain more substantial content.
-2. **Duration**: Longer videos or animations are preferred, as they likely capture more of the moment.
-3. **Image Date**: Files with an embedded image date are more valuable because they give you a precise timestamp.
-4. **Geolocation**: Files that include geolocation data are prioritized next, providing context for where the media was captured.
-5. **Camera Model**: Files with specific camera model information are also given priority, helping ensure consistency in quality and format.
-6. **Quality and Size**: Finally, files with higher quality and larger file sizes are favored, ensuring that the most detailed and high-resolution media is preserved.
+### Leveraging FFmpeg and libvips
 
-#### 🎬 Step 2: Picking the Best Entry—Two Scenarios
+SMO relies on the powerful decoding capabilities of FFmpeg and libvips to handle a wide range of media formats. If you need to support additional formats, simply follow the guidelines in the [FFmpeg documentation](https://ffmpeg.org/documentation.html) and [libvips documentation](https://libvips.github.io/libvips/) to compile these libraries with the necessary codecs and plugins.
 
-After prioritizing the files, SMO then decides the best approach to take based on the type of content:
+### 🏎️ High-Performance Engine
 
-1. **One-Frame Entry (Photo or Thumbnail)**:
+SMO isn’t just effective; it’s built for speed:
 
-   - **Case**: The best file in the cluster is a one-frame entry (either a photo or a one-frame video).
-   - **Approach**: Since SMO has already prioritized files with more frames, this one-frame entry likely represents a key moment. SMO then groups all other one-frame entries, considering them as possible captures of that moment.
+- **Downscaling**: Sharp and FFmpeg are used to reduce data size while maintaining essential features, making comparisons faster and more efficient.
+- **Concurrency**: SMO maximizes your hardware by processing files in parallel, cutting down the time needed to organize large collections.
+- **Caching**: Pause and resume your deduplication tasks without losing any progress, thanks to SMO's robust caching system.
 
-   **Example**: You have a photo and a one-frame video both showing the same sunset. Since they’re essentially the same, SMO will keep the best one and discard the other.
+## 🤝 Contribute to SMO
 
-2. **Multi-Frame Entry (Video or Animation)**:
-
-   - **Case**: The best file in the cluster is a multi-frame entry, like a video or an animated image.
-   - **Approach**: This situation is trickier. Some of the one-frame entries might be genuine captures from this video (e.g., a keyframe you captured while watching the video), while others might be thumbnails generated by software. Here’s how SMO handles this:
-     1. **Quality Check**: SMO picks all one-frame entries that have the same or better quality as the multi-frame entry.
-     2. **Date Matching**: If the multi-frame entry has an image date, SMO requires that these one-frame entries also have an image date. This ensures that the captures are genuine and not just random thumbnails.
-     3. **Final Deduplication**: SMO then performs deduplication on these selected files, ensuring that any genuine captures are preserved, while unnecessary thumbnails are discarded.
-
-   **Example**: Imagine you have a video of your child’s first steps and a few photos. SMO identifies the video as the best entry. It then checks if the photos are actual captures of that moment (e.g., taken with the same camera at the same time) or just thumbnails generated by some software. SMO will keep the genuine captures and discard the rest.
-
-### Why SMO Deduplicates the Cluster Again
-
-You might wonder why SMO goes through the process of deduplicating the cluster again after selecting the best files. This step is crucial because of the nuances in how media is captured and stored:
-
-- **User-Captured Moments**: Sometimes, users capture a moment from a video, resulting in a photo or screenshot that they want to keep. These captures are valuable and should be preserved alongside the original video.
-- **Software-Generated Thumbnails**: On the other hand, some one-frame entries might be thumbnails generated automatically by software. These are often redundant and not worth keeping.
-
-By deduplicating the cluster again, SMO ensures that only the most meaningful files are kept, giving you a clean, organized media collection without losing any important memories.
-
-### 🏎️ Performance Optimizations
-
-SMO doesn’t just work—it flies:
-
-- **Downscaling**: Before comparison, media files are downscaled using Sharp and FFmpeg, reducing data size while maintaining key features.
-- **Concurrency**: SMO uses multiple CPU cores to process files in parallel, maximizing speed and efficiency.
-- **Caching**: The deduplication
-
-stage includes a caching mechanism so that you can pause and resume without losing progress.
-
-### Supported Formats
-
-SMO supports most common image and video formats. For HEIC or DNG support, you need to recompile libvips:
-
-```bash
-./configure --with-heic --with-dng
-make
-sudo make install
-```
-
-## 🤝 Contributing
-
-We welcome contributions from the community! Feel free to fork the repository, make your changes, and submit a pull request.
+Join the community and help make SMO even better! Fork the repository, make your improvements, and submit a pull request.
 
 ## 📝 License
 
-SMO is open-source software, licensed under the MIT License.
+SotiMediaOrganizer is open-source software licensed under the MIT License.
