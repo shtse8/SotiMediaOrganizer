@@ -180,7 +180,7 @@ Example format strings:
     // Stage 3: Deduplication
     console.log(chalk.blue("\nStage 3: Deduplicating files..."));
     const deduplicationResult = await organizer.deduplicateFiles(
-      gatherFileInfoResult.fileInfoMap,
+      gatherFileInfoResult.validFiles,
       resolution,
       frameCount,
       similarity,
@@ -226,13 +226,16 @@ function printResults(
   );
   console.log(
     chalk.yellow(
-      `Total duplicates: ${Array.from(deduplicationResult.duplicateSets.values()).reduce((sum, set) => sum + set.duplicates.size, 0)}`,
+      `Total duplicates: ${Array.from(
+        deduplicationResult.duplicateSets.values(),
+      ).reduce((sum, set) => sum + set.duplicates.size, 0)}`,
     ),
   );
   console.log(
     chalk.red(`Files with errors: ${gatherFileInfoResult.errorFiles.length}`),
   );
 }
+
 try {
   await main();
 } catch (error) {

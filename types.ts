@@ -11,7 +11,7 @@ export interface FileInfo {
 }
 
 export interface DuplicateSet {
-  bestFile: FileInfo;
+  bestFile: string;
   duplicates: Set<string>;
 }
 
@@ -40,11 +40,11 @@ export interface Stats {
 }
 
 export interface GatherFileInfoResult {
-  fileInfoMap: Map<string, FileInfo>;
+  validFiles: string[];
   errorFiles: string[];
 }
 
 export interface DeduplicationResult {
-  uniqueFiles: Map<string, FileInfo>;
-  duplicateSets: Map<Buffer, DuplicateSet>;
+  uniqueFiles: Set<string>;
+  duplicateSets: Map<string, DuplicateSet>;
 }

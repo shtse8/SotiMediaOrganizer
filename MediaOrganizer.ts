@@ -206,10 +206,10 @@ export class MediaOrganizer {
     frameCount: number,
     concurrency: number = 10,
   ): Promise<GatherFileInfoResult> {
-    const fileInfoMap = new Map<string, FileInfo>();
     const formatStats = new Map<string, Stats>();
     const semaphore = new Semaphore(concurrency);
     const errorFiles: string[] = [];
+    const validFiles: string[] = [];
 
     const multibar = new cliProgress.MultiBar(
       {
@@ -311,9 +311,7 @@ export class MediaOrganizer {
         await semaphore.waitForUnlock();
         semaphore.runExclusive(async () => {
           try {
-            let fileInfo: FileInfo | undefined = (await this.db.get(file)) as
-              | FileInfo
-              | undefined;
+            let fileInfo: FileInfo | undefined = await this.db.get(file);
 
             if (fileInfo) {
               stats.cachedCount++;
@@ -321,18 +319,14 @@ export class MediaOrganizer {
               fileInfo = await this.getFileInfo(file, resolution, frameCount);
               await this.db.put(file, fileInfo);
             }
-            fileInfoMap.set(file, fileInfo);
 
             if (fileInfo.geoLocation) stats.withGeoCount++;
             if (fileInfo.imageDate) stats.withImageDateCount++;
             if (fileInfo.cameraModel) stats.withCameraCount++;
+            validFiles.push(file);
           } catch {
             stats.errorCount++;
             errorFiles.push(file);
-
-            // if (multibar.log) {
-            //   multibar.log(`Error processing file ${file}: ${error}`);
-            // }
           } finally {
             stats.processedCount++;
             bar.update(stats.processedCount, stats);
@@ -344,25 +338,25 @@ export class MediaOrganizer {
 
     multibar.stop();
 
-    return { fileInfoMap, errorFiles };
+    return { validFiles, errorFiles };
   }
 
   async deduplicateFiles(
-    fileInfoMap: Map<string, FileInfo>,
+    files: string[],
     resolution: number,
     frameCount: number,
     similarity: number,
   ): Promise<DeduplicationResult> {
-    const imageFiles = new Map<string, FileInfo>();
-    const videoFiles = new Map<string, FileInfo>();
+    const imageFiles: string[] = [];
+    const videoFiles: string[] = [];
 
     // Separate image and video files
-    for (const [path, fileInfo] of fileInfoMap) {
+    for (const path of files) {
       const fileType = MediaOrganizer.getFileType(path);
       if (fileType === FileType.Image) {
-        imageFiles.set(path, fileInfo);
+        imageFiles.push(path);
       } else if (fileType === FileType.Video) {
-        videoFiles.set(path, fileInfo);
+        videoFiles.push(path);
       }
     }
 
@@ -385,7 +379,7 @@ export class MediaOrganizer {
 
     // Combine results
     return {
-      uniqueFiles: new Map([
+      uniqueFiles: new Set([
         ...imageResult.uniqueFiles,
         ...videoResult.uniqueFiles,
       ]),
@@ -396,30 +390,36 @@ export class MediaOrganizer {
     };
   }
 
-  private deduplicateFileType(
-    fileInfoMap: Map<string, FileInfo>,
+  private async deduplicateFileType(
+    files: string[],
     resolution: number,
     frameCount: number,
     similarity: number,
     fileType: FileType,
-  ): DeduplicationResult {
+  ): Promise<DeduplicationResult> {
     const spinner = new Spinner().start(
-      `Deduplicating ${fileInfoMap.size} files...`,
+      `Deduplicating ${files.length} files...`,
       {
         withPrefix: fileType === FileType.Image ? "Image " : "Video ",
       },
     );
 
-    const uniqueFiles = new Map<string, FileInfo>();
-    const duplicateSets = new Map<Buffer, DuplicateSet>();
+    const uniqueFiles = new Set<string>();
+    const duplicateSets = new Map<string, DuplicateSet>();
     const hashLength = resolution * resolution * frameCount;
     const hammingThreshold = Math.floor(hashLength * (1 - similarity));
 
     // Create VPTree
-    const points = Array.from(fileInfoMap.entries()).map(
-      ([path, fileInfo]) => ({
-        hash: fileInfo.perceptualHash!,
-        identifier: path,
+    const points = await Promise.all(
+      files.map(async (path) => {
+        const fileInfo = await this.db.get(path);
+        if (!fileInfo) {
+          throw new Error(`File info not found for file ${path}`);
+        }
+        return {
+          hash: fileInfo.perceptualHash!,
+          identifier: path,
+        };
       }),
     );
     const vpTree = new VPTree(points, this.hammingDistance.bind(this));
@@ -427,29 +427,28 @@ export class MediaOrganizer {
     // Perform deduplication using VPTree traversal
     const processed = new Set<string>();
 
-    for (const [path, fileInfo] of fileInfoMap) {
+    for (const path of files) {
       if (processed.has(path)) continue;
+
+      const fileInfo = await this.db.get(path);
 
       const neighbors = vpTree.nearestNeighbors(fileInfo.perceptualHash!, {
         distance: hammingThreshold,
       });
+
       if (neighbors.length > 1) {
         // Found duplicates
         const duplicateGroup = neighbors.map((n) => n.identifier);
-        const bestFile = this.selectBestFile(
-          duplicateGroup.map((p) => fileInfoMap.get(p)!),
-        );
+        const bestFile = await this.selectBestFile(duplicateGroup);
         const duplicateSet: DuplicateSet = {
           bestFile: bestFile,
-          duplicates: new Set(
-            duplicateGroup.filter((p) => p !== bestFile.path),
-          ),
+          duplicates: new Set(duplicateGroup.filter((p) => p !== bestFile)),
         };
-        duplicateSets.set(bestFile.hash, duplicateSet);
+        duplicateSets.set(bestFile, duplicateSet);
         duplicateGroup.forEach((p) => processed.add(p));
       } else {
         // Unique file
-        uniqueFiles.set(path, fileInfo);
+        uniqueFiles.add(path);
         processed.add(path);
       }
     }
@@ -479,25 +478,12 @@ export class MediaOrganizer {
     return x & 0x7f;
   }
 
-  private handleDuplicate(
-    fileInfo: FileInfo,
-    duplicateSet: DuplicateSet,
-  ): boolean {
-    const oldBestFile = duplicateSet.bestFile;
-    const newBestFile = this.selectBestFile([oldBestFile, fileInfo]);
-
-    if (newBestFile === fileInfo) {
-      duplicateSet.duplicates.add(oldBestFile.path);
-      duplicateSet.bestFile = fileInfo;
-      return true;
-    } else {
-      duplicateSet.duplicates.add(fileInfo.path);
-      return false;
+  private async selectBestFile(files: string[]): Promise<string> {
+    const fileInfos = await Promise.all(files.map((file) => this.db.get(file)));
+    if (fileInfos.some((info) => !info)) {
+      throw new Error("File info not found");
     }
-  }
-
-  private selectBestFile(files: FileInfo[]): FileInfo {
-    return files.reduce((best, current) => {
+    return fileInfos.reduce((best, current) => {
       if (current.imageDate && !best.imageDate) return current;
       if (best.imageDate && !current.imageDate) return best;
       if (current.geoLocation && !best.geoLocation) return current;
@@ -509,7 +495,7 @@ export class MediaOrganizer {
         if (best.quality > current.quality) return best;
       }
       return current.size > best.size ? current : best;
-    });
+    }).path;
   }
 
   async transferFiles(
@@ -543,15 +529,12 @@ export class MediaOrganizer {
 
       for (const [, duplicateSet] of deduplicationResult.duplicateSets) {
         const bestFile = duplicateSet.bestFile;
-        const duplicateFolderName = basename(
-          bestFile.path,
-          extname(bestFile.path),
-        );
+        const duplicateFolderName = basename(bestFile, extname(bestFile));
         const debugSetFolder = join(debugDir, duplicateFolderName);
 
         await this.transferOrCopyFile(
-          bestFile.path,
-          join(debugSetFolder, basename(bestFile.path)),
+          bestFile,
+          join(debugSetFolder, basename(bestFile)),
           true,
         );
         debugBar.increment();
@@ -571,9 +554,10 @@ export class MediaOrganizer {
     const uniqueBar = multibar.create(deduplicationResult.uniqueFiles.size, 0, {
       phase: "Unique  ",
     });
-    for (const [, fileInfo] of deduplicationResult.uniqueFiles) {
+    for (const filePath of deduplicationResult.uniqueFiles) {
+      const fileInfo = await this.db.get(filePath);
       const targetPath = this.generateTargetPath(format, targetDir, fileInfo);
-      await this.transferOrCopyFile(fileInfo.path, targetPath, !shouldMove);
+      await this.transferOrCopyFile(filePath, targetPath, !shouldMove);
       uniqueBar.increment();
     }
 
@@ -588,10 +572,7 @@ export class MediaOrganizer {
 
       for (const [, duplicateSet] of deduplicationResult.duplicateSets) {
         const bestFile = duplicateSet.bestFile;
-        const duplicateFolderName = basename(
-          bestFile.path,
-          extname(bestFile.path),
-        );
+        const duplicateFolderName = basename(bestFile, extname(bestFile));
         const duplicateSetFolder = join(duplicateDir, duplicateFolderName);
 
         for (const duplicatePath of duplicateSet.duplicates) {
@@ -618,8 +599,13 @@ export class MediaOrganizer {
       );
       for (const [, duplicateSet] of deduplicationResult.duplicateSets) {
         const bestFile = duplicateSet.bestFile;
-        const targetPath = this.generateTargetPath(format, targetDir, bestFile);
-        await this.transferOrCopyFile(bestFile.path, targetPath, !shouldMove);
+        const bestFileInfo = await this.db.get(bestFile);
+        const targetPath = this.generateTargetPath(
+          format,
+          targetDir,
+          bestFileInfo,
+        );
+        await this.transferOrCopyFile(bestFile, targetPath, !shouldMove);
         bestFileBar.increment();
       }
     }
