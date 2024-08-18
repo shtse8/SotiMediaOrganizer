@@ -12,8 +12,7 @@ export class VPTree<T> {
 
   constructor(
     points: T[],
-    private selectVector: (point: T) => Buffer,
-    private distance: (a: Buffer, b: Buffer) => number,
+    private distance: (a: T, b: T) => number,
   ) {
     this.root = this.buildSubtree(points);
   }
@@ -35,10 +34,7 @@ export class VPTree<T> {
 
     const distances = points.map((p) => ({
       point: p,
-      distance: this.distance(
-        this.selectVector(vantagePoint),
-        this.selectVector(p),
-      ),
+      distance: this.distance(vantagePoint, p),
     }));
 
     distances.sort((a, b) => a.distance - b.distance);
@@ -57,10 +53,7 @@ export class VPTree<T> {
     };
   }
 
-  nearestNeighbors(
-    query: Buffer,
-    options: SearchOptions = {},
-  ): SearchResult<T>[] {
+  nearestNeighbors(query: T, options: SearchOptions = {}): SearchResult<T>[] {
     const k = options.k || Infinity;
     const maxDistance = options.distance || Infinity;
 
@@ -75,14 +68,14 @@ export class VPTree<T> {
 
   private search(
     node: VPNode<T> | null,
-    query: Buffer,
+    query: T,
     k: number,
     maxDistance: number,
     maxHeap: MaxHeap<SearchResult<T>>,
   ): void {
     if (node === null) return;
 
-    const dist = this.distance(query, this.selectVector(node.point));
+    const dist = this.distance(query, node.point);
 
     // If the current point is within the distance threshold
     if (dist <= maxDistance) {

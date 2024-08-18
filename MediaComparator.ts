@@ -1,19 +1,18 @@
-import type {
-  DeduplicationResult,
-  FileInfo,
-  FrameInfo,
-  ProgramOptions,
-} from "./types";
+import { Injectable } from "@tsed/di";
+import {
+  AdaptiveExtractionConfig,
+  type DeduplicationResult,
+  type FileInfo,
+  SimilarityConfig,
+} from "./src/types";
 import { VPTree } from "./VPTree";
 
-interface IndexedFrame<T> {
-  node: T;
-  frameIndex: number;
-  hash: Buffer;
-  timestamp: number;
-}
+@Injectable()
 export class MediaComparator {
-  constructor(private options: ProgramOptions) {}
+  constructor(
+    private similarityConfig: SimilarityConfig,
+    private adaptiveExtractionConfig: AdaptiveExtractionConfig,
+  ) {}
 
   private hammingDistance(hash1: Buffer, hash2: Buffer): number {
     let distance = 0;
@@ -64,7 +63,36 @@ export class MediaComparator {
       });
     });
 
-    return <DeduplicationResult<T>>{ uniqueFiles, duplicateSets };
+    return { uniqueFiles, duplicateSets };
+  }
+
+  private dtwDistance(seq1: Buffer[], seq2: Buffer[]): number {
+    const m = seq1.length;
+    const n = seq2.length;
+    const dtw: number[][] = Array(m + 1)
+      .fill(null)
+      .map(() => Array(n + 1).fill(Infinity));
+    dtw[0][0] = 0;
+
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cost = this.hammingDistance(seq1[i - 1], seq2[j - 1]);
+        dtw[i][j] =
+          cost + Math.min(dtw[i - 1][j], dtw[i][j - 1], dtw[i - 1][j - 1]);
+      }
+    }
+
+    return dtw[m][n];
+  }
+
+  private featureDistance(feature1: Buffer, feature2: Buffer): number {
+    const f1 = new Float32Array(feature1.buffer);
+    const f2 = new Float32Array(feature2.buffer);
+    let distance = 0;
+    for (let i = 0; i < f1.length; i++) {
+      distance += Math.abs(f1[i] - f2[i]);
+    }
+    return distance / f1.length;
   }
 
   selectRepresentatives<T>(cluster: T[], selector: (node: T) => FileInfo): T[] {
@@ -72,7 +100,7 @@ export class MediaComparator {
     const bestEntry = sortedEntries[0];
     const bestFileInfo = selector(bestEntry);
 
-    if (bestFileInfo.effectiveFrames === 1) {
+    if (bestFileInfo.media.duration === 0) {
       return [bestEntry];
     } else {
       return this.handleMultiFrameBest(sortedEntries, selector);
@@ -90,9 +118,10 @@ export class MediaComparator {
     const potentialCaptures = sortedEntries.filter((entry) => {
       const fileInfo = selector(entry);
       return (
-        fileInfo.effectiveFrames === 1 &&
-        (fileInfo.quality || 0) >= (bestFileInfo.quality || 0) &&
-        (!bestFileInfo.imageDate || !!fileInfo.imageDate)
+        fileInfo.media.duration === 0 &&
+        (fileInfo.metadata.quality || 0) >=
+          (bestFileInfo.metadata.quality || 0) &&
+        (!bestFileInfo.metadata.imageDate || !!fileInfo.metadata.imageDate)
       );
     });
 
@@ -122,37 +151,44 @@ export class MediaComparator {
     let score = 0;
 
     // Significantly prioritize videos over images
-    if (fileInfo.effectiveFrames > 0) {
+    if (fileInfo.media.duration > 0) {
       score += 10000; // Greatly increased base score for being a video
     }
 
     // Score for duration (log scale to not overemphasize long durations)
-    score += Math.log(fileInfo.duration + 1) * 100; // Increased impact of duration
+    score += Math.log(fileInfo.media.duration + 1) * 100; // Increased impact of duration
 
     // Metadata scores
-    if (fileInfo.imageDate) score += 2000; // High importance, but less than being a video
-    if (fileInfo.gpsLatitude && fileInfo.gpsLongitude) score += 300;
-    if (fileInfo.cameraModel) score += 200;
+    if (fileInfo.metadata.imageDate) score += 2000; // High importance, but less than being a video
+    if (fileInfo.metadata.gpsLatitude && fileInfo.metadata.gpsLongitude)
+      score += 300;
+    if (fileInfo.metadata.cameraModel) score += 200;
 
     // Quality score (adjusted to be more representative)
-    if (fileInfo.quality) {
+    if (fileInfo.metadata.width && fileInfo.metadata.height) {
       // Assuming quality is width * height
       // This gives 100 points for a 1000x1000 image/video
-      score += Math.sqrt(fileInfo.quality);
+      score += Math.sqrt(fileInfo.metadata.width * fileInfo.metadata.height);
     }
 
     // Size score (small bonus for larger files)
-    score += Math.log(fileInfo.size) * 5;
+    score += Math.log(fileInfo.fileStats.size) * 5;
 
     return score;
   }
 
   cluster<T>(nodes: T[], selector: (node: T) => FileInfo): T[][] {
-    const indexedFrames = this.createIndexedFrames(nodes, selector);
-    const vpTree = new VPTree<IndexedFrame<T>>(
-      indexedFrames,
-      (frame) => frame.hash,
-      this.hammingDistance.bind(this),
+    const vpTree = new VPTree(
+      nodes,
+      (a, b) =>
+        this.dtwDistance(
+          selector(a).media.frames.map((x) => x.hash),
+          selector(b).media.frames.map((x) => x.hash),
+        ) /
+        Math.max(
+          selector(a).media.frames.length,
+          selector(b).media.frames.length,
+        ),
     );
 
     const similarityMap = new Map<T, Set<T>>();
@@ -174,131 +210,22 @@ export class MediaComparator {
     return clusters;
   }
 
-  private createIndexedFrames<T>(
-    nodes: T[],
-    selector: (node: T) => FileInfo,
-  ): IndexedFrame<T>[] {
-    const indexedFrames: IndexedFrame<T>[] = [];
-    nodes.forEach((node) => {
-      const fileInfo = selector(node);
-      fileInfo.frames.forEach((frame, frameIndex) => {
-        indexedFrames.push({
-          node,
-          frameIndex,
-          hash: frame.hash,
-          timestamp: frame.timestamp,
-        });
-      });
-    });
-    return indexedFrames;
-  }
-
-  private compareVideos(video1: FileInfo, video2: FileInfo): number {
-    const windowSize = Math.min(
-      video1.frames.length,
-      video2.frames.length,
-      this.options.windowSize,
-    );
-    let bestSimilarity = 0;
-
-    for (let i = 0; i <= video1.frames.length - windowSize; i++) {
-      for (let j = 0; j <= video2.frames.length - windowSize; j++) {
-        const window1 = video1.frames.slice(i, i + windowSize);
-        const window2 = video2.frames.slice(j, j + windowSize);
-        const similarity = 1 - this.dtwDistance(window1, window2) / windowSize;
-        bestSimilarity = Math.max(bestSimilarity, similarity);
-      }
-    }
-
-    return bestSimilarity;
-  }
-
-  private dtwDistance(seq1: FrameInfo[], seq2: FrameInfo[]): number {
-    const m = seq1.length;
-    const n = seq2.length;
-    const dtw: number[][] = Array(m + 1)
-      .fill(null)
-      .map(() => Array(n + 1).fill(Infinity));
-    dtw[0][0] = 0;
-
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        const cost = this.hammingDistance(seq1[i - 1].hash, seq2[j - 1].hash);
-        dtw[i][j] =
-          cost + Math.min(dtw[i - 1][j], dtw[i][j - 1], dtw[i - 1][j - 1]);
-      }
-    }
-
-    return dtw[m][n];
-  }
-
   private findSimilarNodes<T>(
     node: T,
     selector: (node: T) => FileInfo,
-    vpTree: VPTree<IndexedFrame<T>>,
+    vpTree: VPTree<T>,
   ): T[] {
-    const fileInfo = selector(node);
-    const similarNodes = new Set<T>();
-    const frameThreshold = Math.ceil(
-      fileInfo.frames.length * this.options.similarity,
-    );
-
-    fileInfo.frames.forEach((frame) => {
-      const neighbors = vpTree.nearestNeighbors(frame.hash, {
-        distance:
-          this.options.resolution *
-          this.options.resolution *
-          (1 - this.options.similarity),
-      });
-
-      neighbors.forEach((neighbor) => {
-        if (neighbor.node.node !== node) {
-          const neighborNode = neighbor.node.node;
-          similarNodes.add(neighborNode);
-        }
-      });
+    const neighbors = vpTree.nearestNeighbors(node, {
+      distance:
+        this.adaptiveExtractionConfig.resolution *
+        this.adaptiveExtractionConfig.resolution *
+        (1 - this.similarityConfig.similarity),
+      // distance: this.adaptiveExtractionConfig.resolution * this.adaptiveExtractionConfig.resolution * (1 - this.similarityConfig.similarity),
     });
 
-    return Array.from(similarNodes).filter((similarNode) => {
-      const similarFileInfo = selector(similarNode);
-      const matchingFrames = this.countMatchingFrames(
-        fileInfo,
-        similarFileInfo,
-      );
-      return matchingFrames >= frameThreshold;
-    });
-  }
-
-  private countMatchingFrames(
-    fileInfo1: FileInfo,
-    fileInfo2: FileInfo,
-  ): number {
-    let matchingFrames = 0;
-    const maxFrames = Math.max(
-      fileInfo1.frames.length,
-      fileInfo2.frames.length,
-    );
-
-    for (let i = 0; i < maxFrames; i++) {
-      const frame1 =
-        fileInfo1.frames[Math.floor((i * fileInfo1.frames.length) / maxFrames)];
-      const frame2 =
-        fileInfo2.frames[Math.floor((i * fileInfo2.frames.length) / maxFrames)];
-
-      if (frame1 && frame2) {
-        const distance = this.hammingDistance(frame1.hash, frame2.hash);
-        if (
-          distance <=
-          this.options.resolution *
-            this.options.resolution *
-            (1 - this.options.similarity)
-        ) {
-          matchingFrames++;
-        }
-      }
-    }
-
-    return matchingFrames;
+    return neighbors
+      .filter((neighbor) => neighbor.node !== node)
+      .map((neighbor) => neighbor.node);
   }
 
   private expandCluster<T>(

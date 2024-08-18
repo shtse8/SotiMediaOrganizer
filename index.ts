@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import chalk from "chalk";
-import type {
-  ProgramOptions,
-  DeduplicationResult,
-  GatherFileInfoResult,
-  ProcessingConfig,
-} from "./types";
+import {
+  type ProgramOptions,
+  type DeduplicationResult,
+  type GatherFileInfoResult,
+  AdaptiveExtractionConfig,
+  FeatureExtractionConfig,
+  SimilarityConfig,
+  FileStatsConfig,
+} from "./src/types";
 import { MediaOrganizer } from "./MediaOrganizer";
 import os from "os";
-import { MediaComparator } from "./MediaComparator";
-import { MediaProcessor } from "./MediaProcessor";
+import { ExifTool } from "exiftool-vendored";
+import { Context } from "./src/contexts/Context";
 
 function exitHandler() {
   console.log(chalk.red("\nSotiMediaOrganizer was interrupted"));
@@ -131,16 +134,45 @@ async function main() {
   const [source, destination] = program.args as [string, string];
   const options = program.opts<ProgramOptions>();
 
-  const config = <ProcessingConfig>{
-    resolution: options.resolution,
-    framesPerSecond: options.fps,
-    maxFrames: options.maxFrames,
-  };
+  const injector = Context.InjectorService;
 
-  const processor = new MediaProcessor(config);
-  const comparator = new MediaComparator(options);
-  const organizer = new MediaOrganizer(processor, comparator);
+  injector.add(FileStatsConfig, {
+    useValue: {
+      chunkSize: 1024 * 1024,
+    },
+  });
 
+  injector.addProvider(AdaptiveExtractionConfig, {
+    useValue: AdaptiveExtractionConfig.create({
+      maxFrames: options.maxFrames,
+      baseFrameRate: options.fps,
+      sceneChangeThreshold: 0.3,
+      resolution: options.resolution,
+    }),
+  });
+
+  injector.add(FeatureExtractionConfig, {
+    useValue: {
+      colorHistogramBins: 16,
+      edgeDetectionThreshold: 50,
+    },
+  });
+
+  injector.add(SimilarityConfig, {
+    useValue: {
+      similarity: options.similarity,
+      windowSize: options.windowSize,
+      stepSize: options.stepSize,
+    },
+  });
+
+  injector.add(ExifTool, {
+    useFactory: () => new ExifTool(),
+  });
+
+  await injector.load();
+
+  const organizer = injector.get<MediaOrganizer>(MediaOrganizer)!;
   try {
     // Stage 1: File Discovery
     console.log(chalk.blue("Stage 1: Discovering files..."));
@@ -184,7 +216,7 @@ async function main() {
   } catch (error) {
     console.error(chalk.red("An unexpected error occurred:"), error);
   } finally {
-    await processor.cleanup();
+    await organizer.cleanUp();
   }
 }
 

@@ -4,18 +4,16 @@ import {
   type DeduplicationResult,
   type Stats,
   type GatherFileInfoResult,
-  type PathEntry,
   type ProcessingConfig,
   FileType,
   type DuplicateSet,
-} from "./types";
+} from "./src/types";
 import {
   mkdir,
   copyFile,
   rename,
   unlink,
   writeFile,
-  stat,
   readdir,
 } from "fs/promises";
 import { join, basename, dirname, extname, parse } from "path";
@@ -29,57 +27,19 @@ import { createHash, type Hash } from "crypto";
 import { createReadStream } from "fs";
 import path from "path";
 import { Spinner } from "@topcli/spinner";
-import { Database, open, RootDatabase } from "lmdb";
-import type { MediaComparator } from "./MediaComparator";
+import { MediaComparator } from "./MediaComparator";
 import { MediaProcessor } from "./MediaProcessor";
+import { Injectable } from "@tsed/di";
 
+@Injectable()
 export class MediaOrganizer {
-  private db: RootDatabase;
-  private fileInfoDb: Database;
-  private pathDb: Database;
-
   constructor(
     private processor: MediaProcessor,
     private comparator: MediaComparator,
-    dbPath: string = ".mediadb",
-  ) {
-    this.db = open({
-      path: dbPath,
-      compression: true,
-    });
-    this.fileInfoDb = this.db.openDB<FileInfo>({ name: "fileInfo" });
-    this.pathDb = this.db.openDB<PathEntry>({ name: "paths" });
-  }
+  ) {}
 
   private getConfigHash(config: ProcessingConfig): string {
     return createHash("md5").update(JSON.stringify(config)).digest("hex");
-  }
-
-  private getFileInfoKey(fileHash: Buffer, config: ProcessingConfig): string {
-    return `${fileHash.toString("hex")}-${this.getConfigHash(config)}`;
-  }
-
-  async getFileInfo(filePath: string): Promise<FileInfo | undefined> {
-    const pathEntry = await this.pathDb.get(filePath);
-    if (!pathEntry) return undefined;
-    const fileInfoKey = this.getFileInfoKey(
-      pathEntry.hash,
-      this.processor.config,
-    );
-    return this.fileInfoDb.get(fileInfoKey);
-  }
-
-  async setFileInfo(
-    filePath: string,
-    fileInfo: FileInfo,
-    fileDate: Date,
-  ): Promise<void> {
-    const fileInfoKey = this.getFileInfoKey(
-      fileInfo.hash,
-      fileInfo.processingConfig,
-    );
-    await this.fileInfoDb.put(fileInfoKey, fileInfo);
-    await this.pathDb.put(filePath, { hash: fileInfo.hash, fileDate });
   }
 
   async discoverFiles(
@@ -225,8 +185,7 @@ export class MediaOrganizer {
             `${chalk.magenta(stats.withImageDateCount.toString().padStart(5))} w/date | ` +
             `${chalk.magenta(stats.withCameraCount.toString().padStart(5))} w/camera | ` +
             `${chalk.magenta(stats.withGeoCount.toString().padStart(5))} w/geo | ` +
-            `${chalk.red(stats.errorCount.toString().padStart(5))} errors | ` +
-            `${chalk.yellow(stats.cachedCount.toString().padStart(5))} cached`
+            `${chalk.red(stats.errorCount.toString().padStart(5))} errors`
           );
         },
       },
@@ -259,7 +218,6 @@ export class MediaOrganizer {
         withImageDateCount: 0,
         withCameraCount: 0,
         errorCount: 0,
-        cachedCount: 0,
       };
       formatStats.set(format, stats);
 
@@ -284,26 +242,12 @@ export class MediaOrganizer {
         await semaphore.waitForUnlock();
         semaphore.runExclusive(async () => {
           try {
-            let fileInfo = await this.getFileInfo(file);
-            if (
-              fileInfo &&
-              this.isConfigMatch(
-                fileInfo.processingConfig,
-                this.processor.config,
-              )
-            ) {
-              stats.cachedCount++;
-            } else {
-              const hash = await this.processor.calculateFileHash(file);
-              fileInfo = await this.processor.processFile(file, hash);
-              const fileStat = await stat(file);
-              await this.setFileInfo(file, fileInfo, fileStat.mtime);
-            }
+            const fileInfo = await this.processor.processFile(file);
 
-            if (fileInfo.gpsLatitude && fileInfo.gpsLongitude)
+            if (fileInfo.metadata.gpsLatitude && fileInfo.metadata.gpsLongitude)
               stats.withGeoCount++;
-            if (fileInfo.imageDate) stats.withImageDateCount++;
-            if (fileInfo.cameraModel) stats.withCameraCount++;
+            if (fileInfo.metadata.imageDate) stats.withImageDateCount++;
+            if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
             validFiles.push(file);
           } catch {
             stats.errorCount++;
@@ -337,7 +281,7 @@ export class MediaOrganizer {
 
     const fileInfoMap = new Map<string, FileInfo>();
     for (const file of files) {
-      const fileInfo = await this.getFileInfo(file);
+      const fileInfo = await this.processor.processFile(file);
       if (!fileInfo) {
         throw new Error(`File info not found for file ${file}`);
       }
@@ -446,7 +390,6 @@ export class MediaOrganizer {
     debugDir: string,
   ): Promise<string[]> {
     const reports = [];
-    const reportFiles = [];
     const batchSize = 1000;
 
     for (let i = 0; i < duplicateSets.length; i += batchSize) {
@@ -474,18 +417,17 @@ export class MediaOrganizer {
 
       const generateFileDetails = (fileInfo: FileInfo, score: number) => {
         const resolution =
-          fileInfo.width && fileInfo.height
-            ? `${fileInfo.width}x${fileInfo.height}`
+          fileInfo.metadata.width && fileInfo.metadata.height
+            ? `${fileInfo.metadata.width}x${fileInfo.metadata.height}`
             : "Unknown";
         return `
                 <p><strong style="font-size: 16px; color: #ff5722;">Score:</strong> <span style="font-size: 16px; color: #ff5722;">${score.toFixed(2)}</span></p>
-                <p><strong>Size:</strong> ${formatFileSize(fileInfo.size)}</p>
-                ${fileInfo.width && fileInfo.height ? `<p><strong>Resolution:</strong> ${resolution}</p>` : ""}
-                ${fileInfo.duration ? `<p><strong>Duration:</strong> ${formatDuration(fileInfo.duration)}</p>` : ""}
-                ${fileInfo.effectiveFrames !== undefined ? `<p><strong>Effective Frames:</strong> ${fileInfo.effectiveFrames}</p>` : ""}
-                ${fileInfo.imageDate ? `<p><strong>Date:</strong> ${formatDate(fileInfo.imageDate)}</p>` : ""}
-                ${fileInfo.gpsLatitude && fileInfo.gpsLongitude ? `<p><strong>Geo-location:</strong> ${fileInfo.gpsLatitude.toFixed(2)}, ${fileInfo.gpsLongitude.toFixed(2)}</p>` : ""}
-                ${fileInfo.cameraModel ? `<p><strong>Camera:</strong> ${fileInfo.cameraModel}</p>` : ""}
+                <p><strong>Size:</strong> ${formatFileSize(fileInfo.fileStats.size)}</p>
+                ${fileInfo.metadata.width && fileInfo.metadata.height ? `<p><strong>Resolution:</strong> ${resolution}</p>` : ""}
+                ${fileInfo.media.duration ? `<p><strong>Duration:</strong> ${formatDuration(fileInfo.media.duration)}</p>` : ""}
+                ${fileInfo.metadata.imageDate ? `<p><strong>Date:</strong> ${formatDate(fileInfo.metadata.imageDate)}</p>` : ""}
+                ${fileInfo.metadata.gpsLatitude && fileInfo.metadata.gpsLongitude ? `<p><strong>Geo-location:</strong> ${fileInfo.metadata.gpsLatitude.toFixed(2)}, ${fileInfo.metadata.gpsLongitude.toFixed(2)}</p>` : ""}
+                ${fileInfo.metadata.cameraModel ? `<p><strong>Camera:</strong> ${fileInfo.metadata.cameraModel}</p>` : ""}
             `;
       };
 
@@ -522,13 +464,13 @@ export class MediaOrganizer {
       ) => {
         const allMedia = await Promise.all([
           ...Array.from(representatives).map(async (sourcePath) => {
-            const info = await this.getFileInfo(sourcePath);
+            const info = await this.processor.processFile(sourcePath);
             const score = this.comparator.calculateEntryScore(info!);
             const relativePath = convertToRelativePath(sourcePath);
             return { isRepresentative: true, relativePath, info, score };
           }),
           ...Array.from(duplicates).map(async (sourcePath) => {
-            const info = await this.getFileInfo(sourcePath);
+            const info = await this.processor.processFile(sourcePath);
             const score = this.comparator.calculateEntryScore(info!);
             const relativePath = convertToRelativePath(sourcePath);
             return { isRepresentative: false, relativePath, info, score };
@@ -621,10 +563,10 @@ export class MediaOrganizer {
       const reportFileName = `debug-report-${reports.length + 1}.html`;
       const reportPath = join(debugDir, reportFileName);
       await writeFile(reportPath, reportContent, "utf8");
-      reportFiles.push(reportFileName);
+      reports.push(reportFileName);
     }
 
-    return reportFiles;
+    return reports;
   }
 
   private async generateIndex(reportFiles: string[], debugDir: string) {
@@ -717,8 +659,7 @@ export class MediaOrganizer {
       phase: "Unique  ",
     });
     for (const filePath of deduplicationResult.uniqueFiles) {
-      const pathEntry = await this.pathDb.get(filePath);
-      const fileInfo = await this.getFileInfo(filePath);
+      const fileInfo = await this.processor.processFile(filePath);
       if (!fileInfo) {
         throw new Error(`File info not found for file ${filePath}`);
       }
@@ -726,7 +667,6 @@ export class MediaOrganizer {
         format,
         targetDir,
         fileInfo,
-        pathEntry,
         filePath,
       );
       await this.transferOrCopyFile(filePath, targetPath, !shouldMove);
@@ -773,8 +713,7 @@ export class MediaOrganizer {
       for (const duplicateSet of deduplicationResult.duplicateSets) {
         const representatives = duplicateSet.representatives;
         for (const representativePath of representatives) {
-          const pathEntry = await this.pathDb.get(representativePath);
-          const fileInfo = await this.getFileInfo(representativePath);
+          const fileInfo = await this.processor.processFile(representativePath);
           if (!fileInfo) {
             throw new Error(
               `File info not found for file ${representativePath}`,
@@ -784,7 +723,6 @@ export class MediaOrganizer {
             format,
             targetDir,
             fileInfo,
-            pathEntry,
             representativePath,
           );
           await this.transferOrCopyFile(
@@ -860,10 +798,10 @@ export class MediaOrganizer {
     format: string,
     targetDir: string,
     fileInfo: FileInfo,
-    pathEntry: PathEntry,
     sourcePath: string,
   ): string {
-    const mixedDate = fileInfo.imageDate || pathEntry.fileDate;
+    const mixedDate =
+      fileInfo.metadata.imageDate || fileInfo.fileStats.createdAt;
     const { name, ext } = parse(sourcePath);
 
     function generateRandomId(): string {
@@ -871,49 +809,49 @@ export class MediaOrganizer {
     }
 
     const data: { [key: string]: string } = {
-      "I.YYYY": this.formatDate(fileInfo.imageDate, "YYYY"),
-      "I.YY": this.formatDate(fileInfo.imageDate, "YY"),
-      "I.MMMM": this.formatDate(fileInfo.imageDate, "MMMM"),
-      "I.MMM": this.formatDate(fileInfo.imageDate, "MMM"),
-      "I.MM": this.formatDate(fileInfo.imageDate, "MM"),
-      "I.M": this.formatDate(fileInfo.imageDate, "M"),
-      "I.DD": this.formatDate(fileInfo.imageDate, "DD"),
-      "I.D": this.formatDate(fileInfo.imageDate, "D"),
-      "I.DDDD": this.formatDate(fileInfo.imageDate, "DDDD"),
-      "I.DDD": this.formatDate(fileInfo.imageDate, "DDD"),
-      "I.HH": this.formatDate(fileInfo.imageDate, "HH"),
-      "I.H": this.formatDate(fileInfo.imageDate, "H"),
-      "I.hh": this.formatDate(fileInfo.imageDate, "hh"),
-      "I.h": this.formatDate(fileInfo.imageDate, "h"),
-      "I.mm": this.formatDate(fileInfo.imageDate, "mm"),
-      "I.m": this.formatDate(fileInfo.imageDate, "m"),
-      "I.ss": this.formatDate(fileInfo.imageDate, "ss"),
-      "I.s": this.formatDate(fileInfo.imageDate, "s"),
-      "I.a": this.formatDate(fileInfo.imageDate, "a"),
-      "I.A": this.formatDate(fileInfo.imageDate, "A"),
-      "I.WW": this.formatDate(fileInfo.imageDate, "WW"),
+      "I.YYYY": this.formatDate(fileInfo.metadata.imageDate, "YYYY"),
+      "I.YY": this.formatDate(fileInfo.metadata.imageDate, "YY"),
+      "I.MMMM": this.formatDate(fileInfo.metadata.imageDate, "MMMM"),
+      "I.MMM": this.formatDate(fileInfo.metadata.imageDate, "MMM"),
+      "I.MM": this.formatDate(fileInfo.metadata.imageDate, "MM"),
+      "I.M": this.formatDate(fileInfo.metadata.imageDate, "M"),
+      "I.DD": this.formatDate(fileInfo.metadata.imageDate, "DD"),
+      "I.D": this.formatDate(fileInfo.metadata.imageDate, "D"),
+      "I.DDDD": this.formatDate(fileInfo.metadata.imageDate, "DDDD"),
+      "I.DDD": this.formatDate(fileInfo.metadata.imageDate, "DDD"),
+      "I.HH": this.formatDate(fileInfo.metadata.imageDate, "HH"),
+      "I.H": this.formatDate(fileInfo.metadata.imageDate, "H"),
+      "I.hh": this.formatDate(fileInfo.metadata.imageDate, "hh"),
+      "I.h": this.formatDate(fileInfo.metadata.imageDate, "h"),
+      "I.mm": this.formatDate(fileInfo.metadata.imageDate, "mm"),
+      "I.m": this.formatDate(fileInfo.metadata.imageDate, "m"),
+      "I.ss": this.formatDate(fileInfo.metadata.imageDate, "ss"),
+      "I.s": this.formatDate(fileInfo.metadata.imageDate, "s"),
+      "I.a": this.formatDate(fileInfo.metadata.imageDate, "a"),
+      "I.A": this.formatDate(fileInfo.metadata.imageDate, "A"),
+      "I.WW": this.formatDate(fileInfo.metadata.imageDate, "WW"),
 
-      "F.YYYY": this.formatDate(pathEntry.fileDate, "YYYY"),
-      "F.YY": this.formatDate(pathEntry.fileDate, "YY"),
-      "F.MMMM": this.formatDate(pathEntry.fileDate, "MMMM"),
-      "F.MMM": this.formatDate(pathEntry.fileDate, "MMM"),
-      "F.MM": this.formatDate(pathEntry.fileDate, "MM"),
-      "F.M": this.formatDate(pathEntry.fileDate, "M"),
-      "F.DD": this.formatDate(pathEntry.fileDate, "DD"),
-      "F.D": this.formatDate(pathEntry.fileDate, "D"),
-      "F.DDDD": this.formatDate(pathEntry.fileDate, "DDDD"),
-      "F.DDD": this.formatDate(pathEntry.fileDate, "DDD"),
-      "F.HH": this.formatDate(pathEntry.fileDate, "HH"),
-      "F.H": this.formatDate(pathEntry.fileDate, "H"),
-      "F.hh": this.formatDate(pathEntry.fileDate, "hh"),
-      "F.h": this.formatDate(pathEntry.fileDate, "h"),
-      "F.mm": this.formatDate(pathEntry.fileDate, "mm"),
-      "F.m": this.formatDate(pathEntry.fileDate, "m"),
-      "F.ss": this.formatDate(pathEntry.fileDate, "ss"),
-      "F.s": this.formatDate(pathEntry.fileDate, "s"),
-      "F.a": this.formatDate(pathEntry.fileDate, "a"),
-      "F.A": this.formatDate(pathEntry.fileDate, "A"),
-      "F.WW": this.formatDate(pathEntry.fileDate, "WW"),
+      "F.YYYY": this.formatDate(fileInfo.fileStats.createdAt, "YYYY"),
+      "F.YY": this.formatDate(fileInfo.fileStats.createdAt, "YY"),
+      "F.MMMM": this.formatDate(fileInfo.fileStats.createdAt, "MMMM"),
+      "F.MMM": this.formatDate(fileInfo.fileStats.createdAt, "MMM"),
+      "F.MM": this.formatDate(fileInfo.fileStats.createdAt, "MM"),
+      "F.M": this.formatDate(fileInfo.fileStats.createdAt, "M"),
+      "F.DD": this.formatDate(fileInfo.fileStats.createdAt, "DD"),
+      "F.D": this.formatDate(fileInfo.fileStats.createdAt, "D"),
+      "F.DDDD": this.formatDate(fileInfo.fileStats.createdAt, "DDDD"),
+      "F.DDD": this.formatDate(fileInfo.fileStats.createdAt, "DDD"),
+      "F.HH": this.formatDate(fileInfo.fileStats.createdAt, "HH"),
+      "F.H": this.formatDate(fileInfo.fileStats.createdAt, "H"),
+      "F.hh": this.formatDate(fileInfo.fileStats.createdAt, "hh"),
+      "F.h": this.formatDate(fileInfo.fileStats.createdAt, "h"),
+      "F.mm": this.formatDate(fileInfo.fileStats.createdAt, "mm"),
+      "F.m": this.formatDate(fileInfo.fileStats.createdAt, "m"),
+      "F.ss": this.formatDate(fileInfo.fileStats.createdAt, "ss"),
+      "F.s": this.formatDate(fileInfo.fileStats.createdAt, "s"),
+      "F.a": this.formatDate(fileInfo.fileStats.createdAt, "a"),
+      "F.A": this.formatDate(fileInfo.fileStats.createdAt, "A"),
+      "F.WW": this.formatDate(fileInfo.fileStats.createdAt, "WW"),
 
       "D.YYYY": this.formatDate(mixedDate, "YYYY"),
       "D.YY": this.formatDate(mixedDate, "YY"),
@@ -943,16 +881,19 @@ export class MediaOrganizer {
       EXT: ext.slice(1).toLowerCase(),
       RND: generateRandomId(),
       GEO:
-        fileInfo.gpsLatitude && fileInfo.gpsLongitude
-          ? `${fileInfo.gpsLatitude.toFixed(2)}_${fileInfo.gpsLongitude.toFixed(2)}`
+        fileInfo.metadata.gpsLatitude && fileInfo.metadata.gpsLongitude
+          ? `${fileInfo.metadata.gpsLatitude.toFixed(2)}_${fileInfo.metadata.gpsLongitude.toFixed(2)}`
           : "",
-      CAM: fileInfo.cameraModel || "",
-      TYPE: fileInfo.quality !== undefined ? "Image" : "Other",
+      CAM: fileInfo.metadata.cameraModel || "",
+      TYPE: fileInfo.media.duration > 0 ? "Video" : "Image",
       "HAS.GEO":
-        fileInfo.gpsLatitude && fileInfo.gpsLongitude ? "GeoTagged" : "NoGeo",
-      "HAS.CAM": fileInfo.cameraModel ? "WithCamera" : "NoCamera",
+        fileInfo.metadata.gpsLatitude && fileInfo.metadata.gpsLongitude
+          ? "GeoTagged"
+          : "NoGeo",
+      "HAS.CAM": fileInfo.metadata.cameraModel ? "WithCamera" : "NoCamera",
       "HAS.DATE":
-        fileInfo.imageDate && !isNaN(fileInfo.imageDate.getTime())
+        fileInfo.metadata.imageDate &&
+        !isNaN(fileInfo.metadata.imageDate.getTime())
           ? "Dated"
           : "NoDate",
     };
@@ -1104,5 +1045,9 @@ export class MediaOrganizer {
       return value.toDate();
     }
     return undefined;
+  }
+
+  async cleanUp(): Promise<void> {
+    await this.processor.cleanUp();
   }
 }
