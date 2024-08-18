@@ -10,6 +10,8 @@
 - **Flexible Directory Structure**: Customize the folder hierarchy to fit your organizational style using an intuitive format string system.
 - **Pause and Resume**: Robust caching allows you to pause and resume deduplication tasks at any time.
 - **Wide Format Support**: Handle everything from JPEG to HEIC, and MP4 to DNG—just recompile libvips for specialized formats.
+- **Dependency Injection**: Utilizes `@tsed/di` for flexible and modular management of services, enhancing testability and maintainability.
+- **Job-Based Architecture**: Introduced job-based processing for metadata extraction, adaptive extraction, and file stats, leading to a more organized and scalable codebase.
 
 ## 🌟 Easy Installation
 
