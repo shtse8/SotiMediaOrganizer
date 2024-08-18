@@ -23,7 +23,8 @@ export interface FileInfo {
   width: number;
   height: number;
   quality: number;
-  geoLocation?: string;
+  gpsLatitude?: number;
+  gpsLongitude?: number;
   cameraModel?: string;
   processingConfig: ProcessingConfig;
   effectiveFrames: number;

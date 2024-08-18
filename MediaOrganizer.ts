@@ -300,7 +300,7 @@ export class MediaOrganizer {
               await this.setFileInfo(file, fileInfo, fileStat.mtime);
             }
 
-            if (fileInfo.geoLocation) stats.withGeoCount++;
+            if (fileInfo.gpsLatitude && fileInfo.gpsLongitude) stats.withGeoCount++;
             if (fileInfo.imageDate) stats.withImageDateCount++;
             if (fileInfo.cameraModel) stats.withCameraCount++;
             validFiles.push(file);
@@ -464,8 +464,6 @@ export class MediaOrganizer {
         `${(size / (1024 * 1024)).toFixed(2)} MB`;
       const formatDate = (date?: Date) =>
         date ? date.toDateString() : "Unknown";
-      const formatGeoLocation = (geoLocation?: string) =>
-        geoLocation || "Unknown";
       const formatDuration = (duration: number) => {
         const seconds = Math.floor((duration / 1000) % 60);
         const minutes = Math.floor((duration / (1000 * 60)) % 60);
@@ -485,7 +483,7 @@ export class MediaOrganizer {
                 ${fileInfo.duration ? `<p><strong>Duration:</strong> ${formatDuration(fileInfo.duration)}</p>` : ""}
                 ${fileInfo.effectiveFrames !== undefined ? `<p><strong>Effective Frames:</strong> ${fileInfo.effectiveFrames}</p>` : ""}
                 ${fileInfo.imageDate ? `<p><strong>Date:</strong> ${formatDate(fileInfo.imageDate)}</p>` : ""}
-                ${fileInfo.geoLocation ? `<p><strong>Geo-location:</strong> ${formatGeoLocation(fileInfo.geoLocation)}</p>` : ""}
+                ${fileInfo.gpsLatitude && fileInfo.gpsLongitude ? `<p><strong>Geo-location:</strong> ${fileInfo.gpsLatitude.toFixed(2)}, ${fileInfo.gpsLongitude.toFixed(2)}</p>` : ""}
                 ${fileInfo.cameraModel ? `<p><strong>Camera:</strong> ${fileInfo.cameraModel}</p>` : ""}
             `;
       };
@@ -943,10 +941,10 @@ export class MediaOrganizer {
       "NAME.U": name.toUpperCase(),
       EXT: ext.slice(1).toLowerCase(),
       RND: generateRandomId(),
-      GEO: fileInfo.geoLocation || "",
+      GEO: fileInfo.gpsLatitude && fileInfo.gpsLongitude ? `${fileInfo.gpsLatitude.toFixed(2)}_${fileInfo.gpsLongitude.toFixed(2)}` : "",
       CAM: fileInfo.cameraModel || "",
       TYPE: fileInfo.quality !== undefined ? "Image" : "Other",
-      "HAS.GEO": fileInfo.geoLocation ? "GeoTagged" : "NoGeo",
+      "HAS.GEO": fileInfo.gpsLatitude && fileInfo.gpsLongitude ? "GeoTagged" : "NoGeo",
       "HAS.CAM": fileInfo.cameraModel ? "WithCamera" : "NoCamera",
       "HAS.DATE":
         fileInfo.imageDate && !isNaN(fileInfo.imageDate.getTime())

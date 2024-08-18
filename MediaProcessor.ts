@@ -44,10 +44,8 @@ export class MediaProcessor {
       width: metadata.ImageWidth ?? 0,
       height: metadata.ImageHeight ?? 0,
       quality: (metadata.ImageHeight ?? 0) * (metadata.ImageWidth ?? 0),
-      geoLocation:
-        metadata.GPSLatitude && metadata.GPSLongitude
-          ? `${metadata.GPSLatitude},${metadata.GPSLongitude}`
-          : undefined,
+    gpsLatitude: metadata.GPSLatitude,
+    gpsLongitude: metadata.GPSLongitude,
       cameraModel: metadata.Model,
       processingConfig: this.config,
       effectiveFrames,

@@ -131,7 +131,7 @@ export class MediaComparator {
 
     // Metadata scores
     if (fileInfo.imageDate) score += 2000; // High importance, but less than being a video
-    if (fileInfo.geoLocation) score += 300;
+    if (fileInfo.gpsLatitude && fileInfo.gpsLongitude) score += 300;
     if (fileInfo.cameraModel) score += 200;
 
     // Quality score (adjusted to be more representative)
