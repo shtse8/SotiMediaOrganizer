@@ -64,6 +64,8 @@ export interface ProgramOptions {
   format: string;
   windowSize: number;
   stepSize: number;
+  sceneChangeThreshold: number;
+  maxChunkSize: number;
 }
 
 export class AdaptiveExtractionConfig extends Data {

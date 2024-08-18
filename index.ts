@@ -65,7 +65,7 @@ async function main() {
       "-x, --max-frames <number>",
       "Maximum number of frames to extract from videos for perceptual hashing",
       parseInt,
-      5,
+      100,
     )
     .option(
       "-s, --similarity <number>",
@@ -89,6 +89,18 @@ async function main() {
       "-F, --format <string>",
       "Format for destination directory",
       "{D.YYYY}/{D.MM}/{D.DD}/{NAME}.{EXT}",
+    )
+    .option(
+      "--scene-change-threshold <number>",
+      "Threshold for scene change detection",
+      parseFloat,
+      0.01,
+    )
+    .option(
+      "--max-chunk-size <number>",
+      "Maximum chunk size for file processing (default: 2MB)",
+      parseInt,
+      2 * 1024 * 1024,
     )
     .addHelpText(
       "after",
@@ -138,7 +150,7 @@ async function main() {
 
   injector.add(FileStatsConfig, {
     useValue: {
-      chunkSize: 1024 * 1024,
+      chunkSize: options.maxChunkSize,
     },
   });
 
@@ -146,7 +158,7 @@ async function main() {
     useValue: AdaptiveExtractionConfig.create({
       maxFrames: options.maxFrames,
       baseFrameRate: options.fps,
-      sceneChangeThreshold: 0.3,
+      sceneChangeThreshold: options.sceneChangeThreshold,
       resolution: options.resolution,
     }),
   });

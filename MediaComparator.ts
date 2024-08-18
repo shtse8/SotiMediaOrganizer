@@ -6,10 +6,12 @@ import {
   SimilarityConfig,
 } from "./src/types";
 import { VPTree } from "./VPTree";
+import { AdaptiveExtractor } from "./src/extractors/AdaptiveExtractor";
 
 @Injectable()
 export class MediaComparator {
   constructor(
+    private extractor: AdaptiveExtractor,
     private similarityConfig: SimilarityConfig,
     private adaptiveExtractionConfig: AdaptiveExtractionConfig,
   ) {}
@@ -83,16 +85,6 @@ export class MediaComparator {
     }
 
     return dtw[m][n];
-  }
-
-  private featureDistance(feature1: Buffer, feature2: Buffer): number {
-    const f1 = new Float32Array(feature1.buffer);
-    const f2 = new Float32Array(feature2.buffer);
-    let distance = 0;
-    for (let i = 0; i < f1.length; i++) {
-      distance += Math.abs(f1[i] - f2[i]);
-    }
-    return distance / f1.length;
   }
 
   selectRepresentatives<T>(cluster: T[], selector: (node: T) => FileInfo): T[] {
@@ -178,18 +170,24 @@ export class MediaComparator {
   }
 
   cluster<T>(nodes: T[], selector: (node: T) => FileInfo): T[][] {
-    const vpTree = new VPTree(
-      nodes,
-      (a, b) =>
-        this.dtwDistance(
-          selector(a).media.frames.map((x) => x.hash),
-          selector(b).media.frames.map((x) => x.hash),
-        ) /
-        Math.max(
-          selector(a).media.frames.length,
-          selector(b).media.frames.length,
-        ),
-    );
+    const vpTree = new VPTree(nodes, (a, b) => {
+      const framesA = this.extractor
+        .getAdaptiveVideoFrames(
+          selector(a).media.frames,
+          selector(a).media.duration,
+        )
+        .map((x) => x.hash);
+      const framesB = this.extractor
+        .getAdaptiveVideoFrames(
+          selector(b).media.frames,
+          selector(b).media.duration,
+        )
+        .map((x) => x.hash);
+      return (
+        this.dtwDistance(framesA, framesB) /
+        Math.max(framesA.length, framesB.length)
+      );
+    });
 
     const similarityMap = new Map<T, Set<T>>();
     nodes.forEach((node) => {

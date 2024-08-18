@@ -8,7 +8,7 @@ import { MediaOrganizer } from "../../MediaOrganizer";
 export class AdaptiveExtractor {
   constructor(private config: AdaptiveExtractionConfig) {}
 
-  async extractFrames(filePath: string): Promise<FrameInfo[]> {
+  extractFrames(filePath: string): Promise<FrameInfo[]> {
     const mediaType = MediaOrganizer.getFileType(filePath);
     if (mediaType === FileType.Image) {
       return this.extractImageFrames(filePath);
@@ -30,21 +30,15 @@ export class AdaptiveExtractor {
   }
 
   private async extractVideoFrames(videoPath: string): Promise<FrameInfo[]> {
-    const duration = await this.getVideoDuration(videoPath);
-    const frameCount = Math.min(
-      Math.ceil(duration * this.config.baseFrameRate),
-      this.config.maxFrames,
-    );
-    const interval = duration / (frameCount + 1);
-
     const sceneChanges = await this.detectSceneChanges(videoPath);
-    return this.extractAdaptiveVideoFrames(
-      videoPath,
-      duration,
-      frameCount,
-      interval,
-      sceneChanges,
+    const keyFrames = await Promise.all(
+      sceneChanges.map(async (timestamp) => {
+        const frameData = await this.extractVideoFrame(videoPath, timestamp);
+        const hash = this.computePerceptualHash(frameData);
+        return FrameInfo.create({ hash, timestamp });
+      }),
     );
+    return keyFrames;
   }
 
   private async detectSceneChanges(videoPath: string): Promise<number[]> {
@@ -81,13 +75,16 @@ export class AdaptiveExtractor {
     return totalSeconds + milliseconds;
   }
 
-  private async extractAdaptiveVideoFrames(
-    videoPath: string,
+  public getAdaptiveVideoFrames(
+    keyFrames: FrameInfo[],
     duration: number,
-    frameCount: number,
-    interval: number,
-    sceneChanges: number[],
-  ): Promise<FrameInfo[]> {
+  ): FrameInfo[] {
+    const frameCount = Math.min(
+      Math.ceil(duration * this.config.baseFrameRate),
+      this.config.maxFrames,
+    );
+    const interval = duration / (frameCount + 1);
+
     const frames: FrameInfo[] = [];
     let nextSceneChange = 0;
 
@@ -95,21 +92,18 @@ export class AdaptiveExtractor {
       const timestamp = i * interval;
 
       while (
-        nextSceneChange < sceneChanges.length &&
-        sceneChanges[nextSceneChange] < timestamp
+        nextSceneChange < keyFrames.length &&
+        keyFrames[nextSceneChange].timestamp < timestamp
       ) {
         nextSceneChange++;
       }
 
-      const extractTime =
-        nextSceneChange < sceneChanges.length &&
-        Math.abs(sceneChanges[nextSceneChange] - timestamp) < interval / 2
-          ? sceneChanges[nextSceneChange]
-          : timestamp;
-
-      const frameData = await this.extractVideoFrame(videoPath, extractTime);
-      const hash = this.computePerceptualHash(frameData);
-      frames.push(FrameInfo.create({ hash, timestamp: extractTime }));
+      frames.push(
+        FrameInfo.create({
+          hash: keyFrames[nextSceneChange].hash,
+          timestamp: timestamp,
+        }),
+      );
     }
 
     return frames;
