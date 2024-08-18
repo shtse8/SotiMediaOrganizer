@@ -300,7 +300,8 @@ export class MediaOrganizer {
               await this.setFileInfo(file, fileInfo, fileStat.mtime);
             }
 
-            if (fileInfo.gpsLatitude && fileInfo.gpsLongitude) stats.withGeoCount++;
+            if (fileInfo.gpsLatitude && fileInfo.gpsLongitude)
+              stats.withGeoCount++;
             if (fileInfo.imageDate) stats.withImageDateCount++;
             if (fileInfo.cameraModel) stats.withCameraCount++;
             validFiles.push(file);
@@ -941,10 +942,14 @@ export class MediaOrganizer {
       "NAME.U": name.toUpperCase(),
       EXT: ext.slice(1).toLowerCase(),
       RND: generateRandomId(),
-      GEO: fileInfo.gpsLatitude && fileInfo.gpsLongitude ? `${fileInfo.gpsLatitude.toFixed(2)}_${fileInfo.gpsLongitude.toFixed(2)}` : "",
+      GEO:
+        fileInfo.gpsLatitude && fileInfo.gpsLongitude
+          ? `${fileInfo.gpsLatitude.toFixed(2)}_${fileInfo.gpsLongitude.toFixed(2)}`
+          : "",
       CAM: fileInfo.cameraModel || "",
       TYPE: fileInfo.quality !== undefined ? "Image" : "Other",
-      "HAS.GEO": fileInfo.gpsLatitude && fileInfo.gpsLongitude ? "GeoTagged" : "NoGeo",
+      "HAS.GEO":
+        fileInfo.gpsLatitude && fileInfo.gpsLongitude ? "GeoTagged" : "NoGeo",
       "HAS.CAM": fileInfo.cameraModel ? "WithCamera" : "NoCamera",
       "HAS.DATE":
         fileInfo.imageDate && !isNaN(fileInfo.imageDate.getTime())
