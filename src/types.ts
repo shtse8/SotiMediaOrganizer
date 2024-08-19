@@ -1,5 +1,4 @@
 import { Injectable } from "@tsed/di";
-import { Data } from "dataclass";
 
 export enum FileType {
   Video,
@@ -12,7 +11,7 @@ export interface ProcessingConfig {
   maxFrames: number;
 }
 
-export class FileStatsConfig extends Data {
+export class FileStatsConfig {
   maxChunkSize: number;
 }
 
@@ -68,7 +67,7 @@ export interface ProgramOptions {
   maxChunkSize: number;
 }
 
-export class AdaptiveExtractionConfig extends Data {
+export class AdaptiveExtractionConfig {
   readonly maxFrames: number;
   readonly baseFrameRate: number;
   readonly sceneChangeThreshold: number;
@@ -76,54 +75,45 @@ export class AdaptiveExtractionConfig extends Data {
 }
 
 @Injectable()
-export class FeatureExtractionConfig extends Data {
+export class FeatureExtractionConfig {
   colorHistogramBins: number;
   edgeDetectionThreshold: number;
 }
 
-export class SimilarityConfig extends Data {
+export class SimilarityConfig {
   similarity: number;
   windowSize: number;
   stepSize: number;
 }
 
-export class JobConfig extends Data {
+export class JobConfig {
   adaptiveExtraction: AdaptiveExtractionConfig;
   featureExtraction: FeatureExtractionConfig;
   similarity: SimilarityConfig;
 }
 
-export class SystemConfig extends Data {
-  concurrency: number;
-  move: boolean;
-  format: string;
-}
-
-export class AdaptiveExtractionJobResult extends Data {
+export class AdaptiveExtractionJobResult {
   frames: FrameInfo[];
   duration: number;
 }
 
-export class FrameInfo extends Data {
+export class FrameInfo {
   hash: Buffer;
   // data: Buffer;
   // features: Buffer;
   timestamp: number;
 }
 
-export class Metadata extends Data {
+export class Metadata {
   width: number;
   height: number;
   gpsLatitude?: number;
   gpsLongitude?: number;
   cameraModel?: string;
   imageDate?: Date;
-  get quality(): number {
-    return Math.sqrt(this.width * this.height);
-  }
 }
 
-export class FileStats extends Data {
+export class FileStats {
   hash: Buffer;
   size: number;
   createdAt: Date;

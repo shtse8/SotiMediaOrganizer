@@ -14,7 +14,7 @@ export class MetadataExtractionJob extends FileHashBaseJob<null, Metadata> {
 
   protected async processFile(filePath: string): Promise<Metadata> {
     const tags = await this.exifTool.read(filePath);
-    return Metadata.create({
+    return {
       imageDate:
         this.toDate(tags.DateTimeOriginal) ?? this.toDate(tags.MediaCreateDate),
       width: tags.ImageWidth || 0,
@@ -22,7 +22,7 @@ export class MetadataExtractionJob extends FileHashBaseJob<null, Metadata> {
       gpsLatitude: tags.GPSLatitude,
       gpsLongitude: tags.GPSLongitude,
       cameraModel: tags.Model,
-    });
+    };
   }
 
   private toDate(

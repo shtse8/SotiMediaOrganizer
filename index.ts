@@ -71,7 +71,7 @@ async function main() {
       "-s, --similarity <number>",
       "Similarity threshold for perceptual hashing",
       parseFloat,
-      0.995,
+      0.99,
     )
     .option(
       "-w, --window-size <number>",
@@ -155,12 +155,12 @@ async function main() {
   });
 
   injector.addProvider(AdaptiveExtractionConfig, {
-    useValue: AdaptiveExtractionConfig.create({
+    useValue: {
       maxFrames: options.maxFrames,
       baseFrameRate: options.fps,
       sceneChangeThreshold: options.sceneChangeThreshold,
       resolution: options.resolution,
-    }),
+    },
   });
 
   injector.add(FeatureExtractionConfig, {

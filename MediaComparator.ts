@@ -209,6 +209,10 @@ export class MediaComparator {
     }
   }
 
+  private getQuality(fileInfo: FileInfo): number {
+    return fileInfo.metadata.width * fileInfo.metadata.height;
+  }
+
   private handleMultiFrameBest<T>(
     sortedEntries: T[],
     selector: (node: T) => FileInfo,
@@ -221,8 +225,7 @@ export class MediaComparator {
       const fileInfo = selector(entry);
       return (
         fileInfo.media.duration === 0 &&
-        (fileInfo.metadata.quality || 0) >=
-          (bestFileInfo.metadata.quality || 0) &&
+        this.getQuality(fileInfo) >= this.getQuality(bestFileInfo) &&
         (!bestFileInfo.metadata.imageDate || !!fileInfo.metadata.imageDate)
       );
     });

@@ -1,10 +1,12 @@
 import {
   AdaptiveExtractionConfig,
   AdaptiveExtractionJobResult,
+  FileType,
 } from "../types";
 import { FileHashBaseJob } from "./FileHashBaseJob";
 import { MediaProcessor } from "../MediaProcessor";
 import { Injectable } from "@tsed/di";
+import { MediaOrganizer } from "../../MediaOrganizer";
 
 @Injectable()
 export class AdaptiveExtractionJob extends FileHashBaseJob<
@@ -25,9 +27,22 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
       this.extractor.extractFrames(filePath),
       this.extractor.getDuration(filePath),
     ]);
-    return AdaptiveExtractionJobResult.create({
+    return {
       frames,
       duration,
-    });
+    };
+  }
+
+  protected isConfigValid(
+    filePath: string,
+    cachedConfig: AdaptiveExtractionConfig,
+  ): boolean {
+    const fileType = MediaOrganizer.getFileType(filePath);
+    if (fileType === FileType.Image) {
+      // for images, we only need to check the resolution
+      return cachedConfig.resolution === this.config.resolution;
+    } else {
+      return super.isConfigValid(filePath, cachedConfig);
+    }
   }
 }

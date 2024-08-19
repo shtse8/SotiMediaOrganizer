@@ -14,12 +14,12 @@ export class FileStatsJob extends BaseFileInfoJob<FileStatsConfig, FileStats> {
   protected async processFile(filePath: string): Promise<FileStats> {
     const stats = await stat(filePath);
     const hash = await this.hashFile(filePath, stats.size);
-    return FileStats.create({
+    return {
       hash,
       size: stats.size,
       createdAt: stats.birthtime,
       modifiedAt: stats.mtime,
-    });
+    };
   }
 
   protected async hashFile(

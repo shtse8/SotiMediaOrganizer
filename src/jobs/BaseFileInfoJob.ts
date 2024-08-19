@@ -3,6 +3,7 @@ import memoizee from "memoizee";
 import { DatabaseContext } from "../contexts/DatabaseContext";
 import { Context } from "../contexts/Context";
 import type { Database } from "lmdb";
+import { deepEquals } from "bun";
 
 export abstract class BaseFileInfoJob<TConfig, TResult> {
   private readonly getLock = memoizee(() => new Mutex());
@@ -30,7 +31,7 @@ export abstract class BaseFileInfoJob<TConfig, TResult> {
 
     return this.getLock(cacheKey).runExclusive(async () => {
       const cachedConfig = await this.configDb.get(cacheKey);
-      if (this.isConfigValid(cachedConfig)) {
+      if (this.isConfigValid(filePath, cachedConfig)) {
         const cachedResult = await this.db!.get(cacheKey);
         if (cachedResult) {
           return cachedResult;
@@ -48,8 +49,12 @@ export abstract class BaseFileInfoJob<TConfig, TResult> {
 
   protected abstract processFile(filePath: string): Promise<TResult>;
 
-  protected isConfigValid(cachedConfig: TConfig): boolean {
-    return JSON.stringify(cachedConfig) === JSON.stringify(this.config);
+  protected isConfigValid(filePath: string, cachedConfig: TConfig): boolean {
+    return this.isEquivalentConfig(this.config, cachedConfig);
+  }
+
+  protected isEquivalentConfig(config1: TConfig, config2: TConfig): boolean {
+    return deepEquals(config1, config2);
   }
 
   protected async getHashKey(filePath: string): Promise<string> {

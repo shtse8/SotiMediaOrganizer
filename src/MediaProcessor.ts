@@ -28,7 +28,7 @@ export class MediaProcessor {
       .toBuffer();
 
     const hash = this.computePerceptualHash(data);
-    return [FrameInfo.create({ hash, timestamp: 0 })];
+    return [{ hash, timestamp: 0 }];
   }
 
   private async extractVideoFrames(videoPath: string): Promise<FrameInfo[]> {
@@ -61,14 +61,17 @@ export class MediaProcessor {
         .on("error", reject)
         .on("end", () => {
           if (currentTimestamp !== null && currentBuffer.length > 0) {
-            keyFrames.push(
-              FrameInfo.create({
-                timestamp: currentTimestamp,
-                hash: this.computePerceptualHash(
-                  currentBuffer.slice(0, frameSize),
-                ),
-              }),
-            );
+            keyFrames.push({
+              timestamp: currentTimestamp,
+              hash: this.computePerceptualHash(
+                currentBuffer.slice(0, frameSize),
+              ),
+            });
+          }
+
+          if (keyFrames.length === 0) {
+            console.error("No key frames detected");
+            reject(new Error("No key frames detected"));
           }
           resolve(keyFrames);
         })
@@ -78,17 +81,15 @@ export class MediaProcessor {
 
           while (currentBuffer.length >= frameSize) {
             if (currentTimestamp !== null) {
-              keyFrames.push(
-                FrameInfo.create({
-                  timestamp: currentTimestamp,
-                  hash: this.computePerceptualHash(
-                    currentBuffer.slice(0, frameSize),
-                  ),
-                }),
-              );
+              keyFrames.push({
+                timestamp: currentTimestamp,
+                hash: this.computePerceptualHash(
+                  currentBuffer.subarray(0, frameSize),
+                ),
+              });
               currentTimestamp = null;
             }
-            currentBuffer = currentBuffer.slice(frameSize);
+            currentBuffer = currentBuffer.subarray(frameSize);
           }
         });
     });
@@ -108,7 +109,10 @@ export class MediaProcessor {
     keyFrames: FrameInfo[],
     duration: number,
   ): FrameInfo[] {
-    return keyFrames;
+    if (keyFrames.length === 0) {
+      throw new Error("No key frames provided");
+    }
+    // return keyFrames;
     const frames: FrameInfo[] = [];
     let nextSceneChange = 0;
     const frameCount = Math.max(
@@ -125,12 +129,10 @@ export class MediaProcessor {
         nextSceneChange++;
       }
 
-      frames.push(
-        FrameInfo.create({
-          hash: keyFrames[nextSceneChange].hash,
-          timestamp: timestamp,
-        }),
-      );
+      frames.push({
+        hash: keyFrames[nextSceneChange].hash,
+        timestamp: timestamp,
+      });
     }
 
     return frames;
