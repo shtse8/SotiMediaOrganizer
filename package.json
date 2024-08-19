@@ -25,6 +25,7 @@
   "dependencies": {
     "@tsed/di": "^7.79.4",
     "@types/fluent-ffmpeg": "^2.1.25",
+    "deep-eql": "^5.0.2",
     "exiftool-vendored": "^24.6.0",
     "fluent-ffmpeg": "^2.1.3",
     "lmdb": "^3.0.13",

@@ -3,7 +3,7 @@ import memoizee from "memoizee";
 import { DatabaseContext } from "../contexts/DatabaseContext";
 import { Context } from "../contexts/Context";
 import type { Database } from "lmdb";
-import { deepEquals } from "bun";
+import eql from "deep-eql";
 
 export abstract class BaseFileInfoJob<TConfig, TResult> {
   private readonly getLock = memoizee(() => new Mutex());
@@ -63,7 +63,7 @@ export abstract class BaseFileInfoJob<TConfig, TResult> {
   }
 
   protected isEquivalentConfig(config1: TConfig, config2: TConfig): boolean {
-    return deepEquals(config1, config2);
+    return eql(config1, config2);
   }
 
   protected async getHashKey(filePath: string): Promise<string> {
