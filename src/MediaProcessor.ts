@@ -21,7 +21,7 @@ export class MediaProcessor {
     const image = sharp(imagePath);
     const data = await image
       .resize(this.config.resolution, this.config.resolution, {
-        fit: "contain",
+        fit: "fill",
       })
       .grayscale()
       .raw()
@@ -45,8 +45,7 @@ export class MediaProcessor {
       ffmpeg(videoPath)
         .videoFilters([
           `select='gt(scene,${this.config.sceneChangeThreshold})'`,
-          `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=decrease`,
-          `pad=width=${this.config.resolution}:height=${this.config.resolution}:x=(ow-iw)/2:y=(oh-ih)/2`,
+          `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=disable`,
           "format=gray",
         ])
         .outputOptions(["-f rawvideo", "-pix_fmt gray"])
