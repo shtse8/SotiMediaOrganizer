@@ -1,11 +1,11 @@
 import sharp from "sharp";
 import ffmpeg from "fluent-ffmpeg";
-import { AdaptiveExtractionConfig, FileType, FrameInfo } from "../types";
+import { AdaptiveExtractionConfig, FileType, FrameInfo } from "./types";
 import { Injectable } from "@tsed/di";
-import { MediaOrganizer } from "../../MediaOrganizer";
+import { MediaOrganizer } from "../MediaOrganizer";
 
 @Injectable()
-export class AdaptiveExtractor {
+export class MediaProcessor {
   constructor(private config: AdaptiveExtractionConfig) {}
 
   extractFrames(filePath: string): Promise<FrameInfo[]> {
@@ -20,7 +20,9 @@ export class AdaptiveExtractor {
   private async extractImageFrames(imagePath: string): Promise<FrameInfo[]> {
     const image = sharp(imagePath);
     const data = await image
-      .resize(this.config.resolution, this.config.resolution, { fit: "fill" })
+      .resize(this.config.resolution, this.config.resolution, {
+        fit: "contain",
+      })
       .grayscale()
       .raw()
       .toBuffer();
@@ -30,38 +32,66 @@ export class AdaptiveExtractor {
   }
 
   private async extractVideoFrames(videoPath: string): Promise<FrameInfo[]> {
-    const sceneChanges = await this.detectSceneChanges(videoPath);
-    const keyFrames = await Promise.all(
-      sceneChanges.map(async (timestamp) => {
-        const frameData = await this.extractVideoFrame(videoPath, timestamp);
-        const hash = this.computePerceptualHash(frameData);
-        return FrameInfo.create({ hash, timestamp });
-      }),
-    );
-    return keyFrames;
+    return this.detectSceneChanges(videoPath);
   }
 
-  private async detectSceneChanges(videoPath: string): Promise<number[]> {
+  public async detectSceneChanges(videoPath: string): Promise<FrameInfo[]> {
     return new Promise((resolve, reject) => {
-      const sceneChanges: number[] = [];
-      let lastSceneChange = 0;
+      const keyFrames: FrameInfo[] = [];
+      let currentBuffer: Buffer = Buffer.alloc(0);
+      let currentTimestamp: number | null = null;
+      const frameSize = this.config.resolution * this.config.resolution; // Size of one grayscale frame
+
       ffmpeg(videoPath)
-        .videoFilters(`select='gt(scene,${this.config.sceneChangeThreshold})'`)
-        .outputOptions("-f null")
+        .videoFilters([
+          `select='gt(scene,${this.config.sceneChangeThreshold})'`,
+          `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=decrease`,
+          `pad=width=${this.config.resolution}:height=${this.config.resolution}:x=(ow-iw)/2:y=(oh-ih)/2`,
+          "format=gray",
+        ])
+        .outputOptions(["-f rawvideo", "-pix_fmt gray"])
         .on("stderr", (stderrLine: string) => {
           const match = stderrLine.match(/time=(\d{2}:\d{2}:\d{2}\.\d{2})/);
           if (match) {
             const timeInSeconds = this.timeToSeconds(match[1]);
-            if (timeInSeconds > lastSceneChange) {
-              lastSceneChange = timeInSeconds;
-              sceneChanges.push(timeInSeconds);
+            if (currentTimestamp === null) {
+              currentTimestamp = timeInSeconds;
             }
           }
         })
-        .on("end", () => resolve(sceneChanges))
         .on("error", reject)
-        .output("/dev/null")
-        .run();
+        .on("end", () => {
+          if (currentTimestamp !== null && currentBuffer.length > 0) {
+            keyFrames.push(
+              FrameInfo.create({
+                timestamp: currentTimestamp,
+                hash: this.computePerceptualHash(
+                  currentBuffer.slice(0, frameSize),
+                ),
+              }),
+            );
+          }
+          resolve(keyFrames);
+        })
+        .pipe()
+        .on("data", (chunk: Buffer) => {
+          currentBuffer = Buffer.concat([currentBuffer, chunk]);
+
+          while (currentBuffer.length >= frameSize) {
+            if (currentTimestamp !== null) {
+              keyFrames.push(
+                FrameInfo.create({
+                  timestamp: currentTimestamp,
+                  hash: this.computePerceptualHash(
+                    currentBuffer.slice(0, frameSize),
+                  ),
+                }),
+              );
+              currentTimestamp = null;
+            }
+            currentBuffer = currentBuffer.slice(frameSize);
+          }
+        });
     });
   }
 
@@ -79,20 +109,18 @@ export class AdaptiveExtractor {
     keyFrames: FrameInfo[],
     duration: number,
   ): FrameInfo[] {
-    const frameCount = Math.min(
-      Math.ceil(duration * this.config.baseFrameRate),
-      this.config.maxFrames,
-    );
-    const interval = duration / (frameCount + 1);
-
+    return keyFrames;
     const frames: FrameInfo[] = [];
     let nextSceneChange = 0;
+    const frameCount = Math.max(
+      1,
+      Math.ceil(duration * this.config.baseFrameRate),
+    );
 
     for (let i = 0; i < frameCount; i++) {
-      const timestamp = i * interval;
-
+      const timestamp = (i * duration) / frameCount;
       while (
-        nextSceneChange < keyFrames.length &&
+        nextSceneChange < keyFrames.length - 1 &&
         keyFrames[nextSceneChange].timestamp < timestamp
       ) {
         nextSceneChange++;
@@ -107,25 +135,6 @@ export class AdaptiveExtractor {
     }
 
     return frames;
-  }
-
-  private async extractVideoFrame(
-    videoPath: string,
-    timestamp: number,
-  ): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const buffers: Buffer[] = [];
-      ffmpeg(videoPath)
-        .seekInput(timestamp)
-        .frames(1)
-        .size(`${this.config.resolution}x${this.config.resolution}`)
-        .outputOptions("-pix_fmt gray")
-        .outputFormat("rawvideo")
-        .on("error", reject)
-        .on("end", () => resolve(Buffer.concat(buffers)))
-        .pipe()
-        .on("data", (chunk) => buffers.push(chunk));
-    });
   }
 
   private computePerceptualHash(imageBuffer: Buffer): Buffer {

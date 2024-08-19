@@ -318,8 +318,11 @@ export class MediaOrganizer {
     }
     for (let i = 0; i < featuredDuplicates.length; i++) {
       const duplicateSet = featuredDuplicates[i];
+      const bestFileInfo = fileInfoMap.get(duplicateSet.bestFile)!;
       console.log(
-        chalk.white(`Duplicate Set ${i + 1}: ${duplicateSet.bestFile}`),
+        chalk.white(
+          `Duplicate Set ${i + 1}: ${duplicateSet.bestFile}, frames: ${bestFileInfo.media.frames.length}`,
+        ),
       );
       console.log(
         chalk.white(`  ${duplicateSet.representatives.size} representatives`),

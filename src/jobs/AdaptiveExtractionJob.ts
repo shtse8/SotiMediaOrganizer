@@ -3,7 +3,7 @@ import {
   AdaptiveExtractionJobResult,
 } from "../types";
 import { FileHashBaseJob } from "./FileHashBaseJob";
-import { AdaptiveExtractor } from "../extractors/AdaptiveExtractor";
+import { MediaProcessor } from "../MediaProcessor";
 import { Injectable } from "@tsed/di";
 
 @Injectable()
@@ -13,7 +13,7 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 > {
   constructor(
     config: AdaptiveExtractionConfig,
-    private extractor: AdaptiveExtractor,
+    private extractor: MediaProcessor,
   ) {
     super("adaptiveExtraction", config);
   }

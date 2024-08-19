@@ -6,12 +6,12 @@ import {
   SimilarityConfig,
 } from "./src/types";
 import { VPTree } from "./VPTree";
-import { AdaptiveExtractor } from "./src/extractors/AdaptiveExtractor";
+import { MediaProcessor } from "./src/MediaProcessor";
 
 @Injectable()
 export class MediaComparator {
   constructor(
-    private extractor: AdaptiveExtractor,
+    private extractor: MediaProcessor,
     private similarityConfig: SimilarityConfig,
     private adaptiveExtractionConfig: AdaptiveExtractionConfig,
   ) {}
@@ -71,20 +71,108 @@ export class MediaComparator {
   private dtwDistance(seq1: Buffer[], seq2: Buffer[]): number {
     const m = seq1.length;
     const n = seq2.length;
+    const window = Math.max(this.similarityConfig.windowSize, Math.abs(m - n));
+
     const dtw: number[][] = Array(m + 1)
       .fill(null)
       .map(() => Array(n + 1).fill(Infinity));
     dtw[0][0] = 0;
 
     for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
+      for (let j = Math.max(1, i - window); j <= Math.min(n, i + window); j++) {
         const cost = this.hammingDistance(seq1[i - 1], seq2[j - 1]);
         dtw[i][j] =
-          cost + Math.min(dtw[i - 1][j], dtw[i][j - 1], dtw[i - 1][j - 1]);
+          cost +
+          Math.min(
+            dtw[i - 1][j], // insertion
+            dtw[i][j - 1], // deletion
+            dtw[i - 1][j - 1], // match
+          );
       }
     }
 
-    return dtw[m][n];
+    // Find the best alignment within the window at the end of the sequences
+    let minDistance = Infinity;
+    for (let i = Math.max(1, m - window); i <= m; i++) {
+      minDistance = Math.min(minDistance, dtw[i][n]);
+    }
+
+    return minDistance;
+  }
+
+  private fastDtwDistance(
+    seq1: Buffer[],
+    seq2: Buffer[],
+    radius: number = 1,
+  ): number {
+    const distFn = (a: Buffer, b: Buffer) => this.hammingDistance(a, b);
+    return this.fastDtw(seq1, seq2, radius, distFn);
+  }
+
+  private fastDtw(
+    seq1: Buffer[],
+    seq2: Buffer[],
+    radius: number,
+    distFn: (a: Buffer, b: Buffer) => number,
+  ): number {
+    const n = seq1.length;
+    const m = seq2.length;
+
+    if (radius < 1) radius = 1;
+    if (n < radius || m < radius) {
+      return this.dtwDistance(seq1, seq2);
+    }
+
+    const nShrunk = Math.floor(n / 2);
+    const mShrunk = Math.floor(m / 2);
+    const shrunkSeq1 = this.reduceByHalf(seq1);
+    const shrunkSeq2 = this.reduceByHalf(seq2);
+
+    const window = this.fastDtw(shrunkSeq1, shrunkSeq2, radius, distFn);
+    return this.dtwDistanceWithWindow(seq1, seq2, window, radius, distFn);
+  }
+
+  private reduceByHalf(seq: Buffer[]): Buffer[] {
+    return seq.filter((_, i) => i % 2 === 0);
+  }
+
+  private dtwDistanceWithWindow(
+    seq1: Buffer[],
+    seq2: Buffer[],
+    window: number,
+    radius: number,
+    distFn: (a: Buffer, b: Buffer) => number,
+  ): number {
+    const n = seq1.length;
+    const m = seq2.length;
+    const windowSize = Math.max(window, Math.abs(n - m) + 2 * radius);
+
+    const dtw: number[][] = [new Array(m + 1).fill(Infinity)];
+
+    for (let i = 1; i <= n; i++) {
+      const prevRow = dtw[dtw.length - 1];
+      const currentRow = new Array(m + 1).fill(Infinity);
+      currentRow[0] = Infinity;
+
+      const jStart = Math.max(1, i - windowSize);
+      const jStop = Math.min(m, i + windowSize);
+
+      for (let j = jStart; j <= jStop; j++) {
+        const cost = distFn(seq1[i - 1], seq2[j - 1]);
+        currentRow[j] =
+          cost +
+          Math.min(
+            prevRow[j], // insertion
+            currentRow[j - 1], // deletion
+            prevRow[j - 1], // match
+          );
+      }
+
+      dtw.push(currentRow);
+      if (dtw.length > 2) dtw.shift(); // Keep only two rows in memory
+    }
+
+    return dtw[dtw.length - 1][m];
   }
 
   selectRepresentatives<T>(cluster: T[], selector: (node: T) => FileInfo): T[] {
@@ -184,8 +272,11 @@ export class MediaComparator {
         )
         .map((x) => x.hash);
       return (
-        this.dtwDistance(framesA, framesB) /
-        Math.max(framesA.length, framesB.length)
+        this.fastDtwDistance(
+          framesA,
+          framesB,
+          this.similarityConfig.windowSize,
+        ) / Math.max(framesA.length, framesB.length)
       );
     });
 
