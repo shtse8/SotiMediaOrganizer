@@ -54,7 +54,7 @@ async function main() {
       "-r, --resolution <number>",
       "Resolution for perceptual hashing",
       parseInt,
-      32,
+      64,
     )
 
     .option(
