@@ -71,7 +71,7 @@ async function main() {
       "-s, --similarity <number>",
       "Similarity threshold for perceptual hashing",
       parseFloat,
-      0.99,
+      0.995,
     )
     .option(
       "-w, --window-size <number>",
