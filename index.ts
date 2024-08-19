@@ -56,18 +56,32 @@ async function main() {
       parseInt,
       32,
     )
+
     .option(
-      "-f, --fps <number>",
-      "Frames per second to extract from videos for perceptual hashing",
+      "--min-frames <number>",
+      "Minimum number of frames to extract from videos",
       parseInt,
-      1,
+      15,
     )
     .option(
-      "-x, --max-frames <number>",
-      "Maximum number of frames to extract from videos for perceptual hashing",
+      "--max-scene-frames <number>",
+      "Maximum number of frames to extract from scene changes",
       parseInt,
-      100,
+      200,
     )
+    .option(
+      "--short-video-threshold <number>",
+      "Duration threshold for short videos (in seconds)",
+      parseFloat,
+      15,
+    )
+    .option(
+      "--target-fps <number>",
+      "Target frames per second for video extraction",
+      parseFloat,
+      0.5,
+    )
+
     .option(
       "-w, --window-size <number>",
       "Window size for frame clustering",
@@ -163,23 +177,26 @@ async function main() {
 
   injector.add(FileStatsConfig, {
     scope: ProviderScope.SINGLETON,
-    useValue: {
-      chunkSize: options.maxChunkSize,
+    useValue: <FileStatsConfig>{
+      maxChunkSize: options.maxChunkSize,
     },
   });
 
-  injector.addProvider(AdaptiveExtractionConfig, {
+  injector.add(AdaptiveExtractionConfig, {
     scope: ProviderScope.SINGLETON,
-    useValue: {
-      maxFrames: options.maxFrames,
-      sceneChangeThreshold: options.sceneChangeThreshold,
+    useValue: <AdaptiveExtractionConfig>{
       resolution: options.resolution,
+      sceneChangeThreshold: options.sceneChangeThreshold,
+      shortVideoThreshold: options.shortVideoThreshold,
+      minFrames: options.minFrames,
+      maxSceneFrames: options.maxSceneFrames,
+      targetFps: options.targetFps,
     },
   });
 
   injector.add(FeatureExtractionConfig, {
     scope: ProviderScope.SINGLETON,
-    useValue: {
+    useValue: <FeatureExtractionConfig>{
       colorHistogramBins: 16,
       edgeDetectionThreshold: 50,
     },
@@ -187,10 +204,9 @@ async function main() {
 
   injector.add(SimilarityConfig, {
     scope: ProviderScope.SINGLETON,
-    useValue: {
+    useValue: <SimilarityConfig>{
       windowSize: options.windowSize,
       stepSize: options.stepSize,
-      fps: options.fps,
       imageSimilarityThreshold: options.imageSimilarityThreshold,
       imageVideoSimilarityThreshold: options.imageVideoSimilarityThreshold,
       videoSimilarityThreshold: options.videoSimilarityThreshold,

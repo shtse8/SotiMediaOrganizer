@@ -16,7 +16,7 @@ export class FileStatsConfig {
 }
 
 export interface FileInfo {
-  media: AdaptiveExtractionJobResult;
+  media: MediaInfo;
   // features: Buffer[];
   fileStats: FileStats;
   metadata: Metadata;
@@ -57,13 +57,17 @@ export interface ProgramOptions {
   concurrency: number;
   move: boolean;
   resolution: number;
-  fps: number;
-  maxFrames: number;
   format: string;
   windowSize: number;
   stepSize: number;
-  sceneChangeThreshold: number;
   maxChunkSize: number;
+
+  // extraction
+  shortVideoThreshold: number;
+  minFrames: number;
+  maxSceneFrames: number;
+  targetFps: number;
+  sceneChangeThreshold: number;
 
   // similarity
   imageSimilarityThreshold: number;
@@ -72,9 +76,12 @@ export interface ProgramOptions {
 }
 
 export class AdaptiveExtractionConfig {
-  readonly maxFrames: number;
-  readonly sceneChangeThreshold: number;
-  readonly resolution: number;
+  resolution: number;
+  sceneChangeThreshold: number;
+  shortVideoThreshold: number;
+  minFrames: number;
+  maxSceneFrames: number;
+  targetFps: number;
 }
 
 @Injectable()
@@ -86,7 +93,6 @@ export class FeatureExtractionConfig {
 export class SimilarityConfig {
   windowSize: number;
   stepSize: number;
-  readonly fps: number;
   imageSimilarityThreshold: number;
   imageVideoSimilarityThreshold: number;
   videoSimilarityThreshold: number;
@@ -98,7 +104,7 @@ export class JobConfig {
   similarity: SimilarityConfig;
 }
 
-export class AdaptiveExtractionJobResult {
+export class MediaInfo {
   frames: FrameInfo[];
   duration: number;
 }

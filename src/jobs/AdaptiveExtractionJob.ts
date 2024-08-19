@@ -1,8 +1,4 @@
-import {
-  AdaptiveExtractionConfig,
-  AdaptiveExtractionJobResult,
-  FileType,
-} from "../types";
+import { AdaptiveExtractionConfig, MediaInfo, FileType } from "../types";
 import { FileHashBaseJob } from "./FileHashBaseJob";
 import { MediaProcessor } from "../MediaProcessor";
 import { Injectable, ProviderScope } from "@tsed/di";
@@ -13,7 +9,7 @@ import { MediaOrganizer } from "../../MediaOrganizer";
 })
 export class AdaptiveExtractionJob extends FileHashBaseJob<
   AdaptiveExtractionConfig,
-  AdaptiveExtractionJobResult
+  MediaInfo
 > {
   constructor(
     config: AdaptiveExtractionConfig,
@@ -22,17 +18,8 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
     super("adaptiveExtraction", config);
   }
 
-  protected async processFile(
-    filePath: string,
-  ): Promise<AdaptiveExtractionJobResult> {
-    const [frames, duration] = await Promise.all([
-      this.extractor.extractFrames(filePath),
-      this.extractor.getDuration(filePath),
-    ]);
-    return {
-      frames,
-      duration,
-    };
+  protected async processFile(filePath: string): Promise<MediaInfo> {
+    return this.extractor.process(filePath);
   }
 
   protected isConfigValid(

@@ -421,9 +421,9 @@ export class MediaOrganizer {
         return date.toDateString();
       };
       const formatDuration = (duration: number) => {
-        const seconds = Math.floor((duration / 1000) % 60);
-        const minutes = Math.floor((duration / (1000 * 60)) % 60);
-        const hours = Math.floor((duration / (1000 * 60 * 60)) % 24);
+        const seconds = Math.floor(duration % 60);
+        const minutes = Math.floor((duration / 60) % 60);
+        const hours = Math.floor((duration / (60 * 60)) % 24);
         return `${hours ? `${hours}:` : ""}${minutes ? `${minutes}:` : ""}${seconds}s`;
       };
 

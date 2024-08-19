@@ -2,9 +2,9 @@ import sharp from "sharp";
 import ffmpeg from "fluent-ffmpeg";
 import {
   AdaptiveExtractionConfig,
+  MediaInfo,
   FileType,
   FrameInfo,
-  SimilarityConfig,
 } from "./types";
 import { Injectable, ProviderScope } from "@tsed/di";
 import { MediaOrganizer } from "../MediaOrganizer";
@@ -13,17 +13,21 @@ import { MediaOrganizer } from "../MediaOrganizer";
   scope: ProviderScope.SINGLETON,
 })
 export class MediaProcessor {
-  constructor(
-    private config: AdaptiveExtractionConfig,
-    private similarityConfig: SimilarityConfig,
-  ) {}
+  constructor(private config: AdaptiveExtractionConfig) {}
 
-  extractFrames(filePath: string): Promise<FrameInfo[]> {
+  async process(filePath: string): Promise<MediaInfo> {
     const mediaType = MediaOrganizer.getFileType(filePath);
     if (mediaType === FileType.Image) {
-      return this.extractImageFrames(filePath);
+      return {
+        frames: await this.extractImageFrames(filePath),
+        duration: 0,
+      };
     } else {
-      return this.extractVideoFrames(filePath);
+      const duration = await this.getVideoDuration(filePath);
+      return {
+        frames: await this.extractVideoFrames(filePath, duration),
+        duration,
+      };
     }
   }
 
@@ -41,71 +45,133 @@ export class MediaProcessor {
     return [{ hash, timestamp: 0 }];
   }
 
-  private async extractVideoFrames(videoPath: string): Promise<FrameInfo[]> {
-    return this.detectSceneChanges(videoPath, this.config.sceneChangeThreshold);
+  private async extractVideoFrames(
+    videoPath: string,
+    duration: number,
+  ): Promise<FrameInfo[]> {
+    const minFrameCount = this.config.minFrames;
+    const targetFrameCount = Math.ceil(duration * this.config.targetFps);
+
+    let frames: FrameInfo[];
+
+    if (duration <= this.config.shortVideoThreshold) {
+      // For short videos, extract frames evenly
+      frames = await this.extractFramesEvenly(
+        videoPath,
+        duration,
+        minFrameCount,
+      );
+    } else {
+      // For longer videos, start with scene change detection
+      frames = await this.detectSceneChanges(videoPath);
+
+      // If scene changes don't yield enough frames, supplement with evenly spaced frames
+      if (frames.length < minFrameCount) {
+        const additionalFrames = await this.extractFramesEvenly(
+          videoPath,
+          duration,
+          minFrameCount - frames.length,
+        );
+        frames = this.mergeAndSortFrames(frames, additionalFrames);
+      }
+
+      // If we have more than the target frame count, consider reducing
+      if (
+        frames.length > targetFrameCount &&
+        frames.length > this.config.maxSceneFrames
+      ) {
+        frames = this.reduceFrames(
+          frames,
+          Math.max(targetFrameCount, this.config.maxSceneFrames),
+        );
+      }
+    }
+
+    return frames;
   }
 
-  public async detectSceneChanges(
+  private async extractFramesWithFilter(
     videoPath: string,
-    sceneChangeThreshold: number,
+    selectFilter: string,
   ): Promise<FrameInfo[]> {
     return new Promise((resolve, reject) => {
-      const keyFrames: FrameInfo[] = [];
-      let currentBuffer: Buffer = Buffer.alloc(0);
+      const frames: FrameInfo[] = [];
+      let buffer = Buffer.alloc(0);
+      const frameSize = this.config.resolution * this.config.resolution;
       let currentTimestamp: number | null = null;
-      const frameSize = this.config.resolution * this.config.resolution; // Size of one grayscale frame
 
       ffmpeg(videoPath)
         .videoFilters([
-          `select='eq(n,0)+gt(scene,${sceneChangeThreshold})'`,
+          selectFilter,
           `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=disable`,
           "format=gray",
         ])
-        .outputOptions(["-vsync vfr", "-f rawvideo", "-pix_fmt gray"])
+        .outputOptions(["-vsync", "vfr", "-f", "rawvideo", "-pix_fmt", "gray"])
+        .on("error", reject)
+        .on("end", () => {
+          // Process any remaining complete frame in the buffer
+          if (buffer.length >= frameSize && currentTimestamp !== null) {
+            const hash = this.computePerceptualHash(buffer.slice(0, frameSize));
+            frames.push({ hash, timestamp: currentTimestamp });
+          }
+          resolve(frames);
+        })
         .on("stderr", (stderrLine: string) => {
           const match = stderrLine.match(/time=(\d{2}:\d{2}:\d{2}\.\d{2})/);
           if (match) {
-            const timeInSeconds = this.timeToSeconds(match[1]);
-            if (currentTimestamp === null) {
-              currentTimestamp = timeInSeconds;
-            }
+            currentTimestamp = this.timeToSeconds(match[1]);
           }
-        })
-        .on("error", reject)
-        .on("end", () => {
-          if (currentTimestamp !== null && currentBuffer.length > 0) {
-            keyFrames.push({
-              timestamp: currentTimestamp,
-              hash: this.computePerceptualHash(
-                currentBuffer.slice(0, frameSize),
-              ),
-            });
-          }
-
-          if (keyFrames.length === 0) {
-            console.error("No key frames detected", videoPath);
-            reject(new Error("No key frames detected"));
-          }
-          resolve(keyFrames);
         })
         .pipe()
         .on("data", (chunk: Buffer) => {
-          currentBuffer = Buffer.concat([currentBuffer, chunk]);
+          buffer = Buffer.concat([buffer, chunk]);
 
-          while (currentBuffer.length >= frameSize) {
+          // Process complete frames
+          while (buffer.length >= frameSize) {
             if (currentTimestamp !== null) {
-              keyFrames.push({
-                timestamp: currentTimestamp,
-                hash: this.computePerceptualHash(
-                  currentBuffer.subarray(0, frameSize),
-                ),
-              });
+              const frameBuffer = buffer.subarray(0, frameSize);
+              const hash = this.computePerceptualHash(frameBuffer);
+              frames.push({ hash, timestamp: currentTimestamp });
               currentTimestamp = null;
             }
-            currentBuffer = currentBuffer.subarray(frameSize);
+            buffer = buffer.subarray(frameSize);
           }
         });
     });
+  }
+
+  private async extractFramesEvenly(
+    videoPath: string,
+    duration: number,
+    frameCount: number,
+  ): Promise<FrameInfo[]> {
+    const frameInterval = duration / frameCount;
+    const selectFilter = `select=(isnan(prev_selected_t)*gte(t\\,${frameInterval}))+gte(t-prev_selected_t\\,${frameInterval})`;
+    return this.extractFramesWithFilter(videoPath, selectFilter);
+  }
+
+  private async detectSceneChanges(videoPath: string): Promise<FrameInfo[]> {
+    const selectFilter = `select='eq(n,0)+gt(scene,${this.config.sceneChangeThreshold})'`;
+    return this.extractFramesWithFilter(videoPath, selectFilter);
+  }
+  private mergeAndSortFrames(
+    frames1: FrameInfo[],
+    frames2: FrameInfo[],
+  ): FrameInfo[] {
+    return [...frames1, ...frames2].sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  private reduceFrames(frames: FrameInfo[], targetCount: number): FrameInfo[] {
+    if (frames.length <= targetCount) return frames;
+
+    const step = frames.length / targetCount;
+    const reducedFrames: FrameInfo[] = [];
+
+    for (let i = 0; i < frames.length; i += step) {
+      reducedFrames.push(frames[Math.floor(i)]);
+    }
+
+    return reducedFrames;
   }
 
   private timeToSeconds(timeString: string): number {
@@ -116,51 +182,6 @@ export class MediaProcessor {
     const milliseconds = Number(fractionalSeconds) / 100;
 
     return totalSeconds + milliseconds;
-  }
-
-  public getAdaptiveVideoFrames(
-    keyFrames: FrameInfo[],
-    duration: number,
-  ): FrameInfo[] {
-    // return keyFrames;
-    if (keyFrames.length === 0) {
-      throw new Error("No key frames provided");
-    }
-    const frames: FrameInfo[] = [];
-    let nextSceneChange = 0;
-    const frameCount = Math.max(
-      1,
-      Math.ceil(duration * this.similarityConfig.fps),
-    );
-
-    for (let i = 0; i < frameCount; i++) {
-      const timestamp = (i * duration) / frameCount;
-      while (
-        nextSceneChange < keyFrames.length - 1 &&
-        keyFrames[nextSceneChange].timestamp < timestamp
-      ) {
-        nextSceneChange++;
-      }
-
-      frames.push({
-        hash: keyFrames[nextSceneChange].hash,
-        timestamp: timestamp,
-      });
-    }
-
-    if (frames.length > keyFrames.length) {
-      console.log("duration", duration);
-      console.log("frameCount", frameCount);
-      console.log(
-        "keyFrames",
-        keyFrames.map((k) => k.timestamp),
-      );
-      console.log(
-        "frames",
-        frames.map((f) => f.timestamp),
-      );
-    }
-    return frames;
   }
 
   private computePerceptualHash(imageBuffer: Buffer): Buffer {

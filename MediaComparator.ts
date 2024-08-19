@@ -1,7 +1,7 @@
 import { Injectable, ProviderScope } from "@tsed/di";
 import {
   AdaptiveExtractionConfig,
-  AdaptiveExtractionJobResult,
+  MediaInfo,
   type DeduplicationResult,
   type FileInfo,
   FrameInfo,
@@ -197,10 +197,7 @@ export class MediaComparator {
     return score;
   }
 
-  private calculateSimilarity(
-    media1: AdaptiveExtractionJobResult,
-    media2: AdaptiveExtractionJobResult,
-  ): number {
+  private calculateSimilarity(media1: MediaInfo, media2: MediaInfo): number {
     const isImage1 = media1.duration === 0;
     const isImage2 = media2.duration === 0;
 
@@ -229,8 +226,8 @@ export class MediaComparator {
   }
 
   private calculateImageVideoSimilarity(
-    image: AdaptiveExtractionJobResult,
-    video: AdaptiveExtractionJobResult,
+    image: MediaInfo,
+    video: MediaInfo,
   ): number {
     let bestSimilarity = 0;
     for (const frame of video.frames) {
@@ -243,8 +240,8 @@ export class MediaComparator {
   }
 
   private calculateVideoSimilarity(
-    media1: AdaptiveExtractionJobResult,
-    media2: AdaptiveExtractionJobResult,
+    media1: MediaInfo,
+    media2: MediaInfo,
   ): number {
     const maxDuration = Math.max(media1.duration, media2.duration);
     const minDuration = Math.min(media1.duration, media2.duration);
@@ -288,7 +285,7 @@ export class MediaComparator {
   }
 
   private getFramesInTimeRange(
-    media: AdaptiveExtractionJobResult,
+    media: MediaInfo,
     startTime: number,
     endTime: number,
   ): FrameInfo[] {
@@ -373,10 +370,7 @@ export class MediaComparator {
       .map((neighbor) => neighbor.node);
   }
 
-  private getAdaptiveThreshold(
-    media1: AdaptiveExtractionJobResult,
-    media2: AdaptiveExtractionJobResult,
-  ): number {
+  private getAdaptiveThreshold(media1: MediaInfo, media2: MediaInfo): number {
     const isImage1 = media1.duration === 0;
     const isImage2 = media2.duration === 0;
 
