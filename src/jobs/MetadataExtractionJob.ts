@@ -1,9 +1,11 @@
 import { FileHashBaseJob } from "./FileHashBaseJob";
 import { ExifDate, ExifDateTime, ExifTool } from "exiftool-vendored";
 import { Metadata } from "../types";
-import { Injectable } from "@tsed/di";
+import { Injectable, ProviderScope } from "@tsed/di";
 
-@Injectable()
+@Injectable({
+  scope: ProviderScope.SINGLETON,
+})
 export class MetadataExtractionJob extends FileHashBaseJob<null, Metadata> {
   private exifTool: ExifTool;
 
@@ -29,7 +31,11 @@ export class MetadataExtractionJob extends FileHashBaseJob<null, Metadata> {
     value: string | ExifDateTime | ExifDate | undefined,
   ): Date | undefined {
     if (!value) return undefined;
-    if (typeof value === "string") return new Date(value);
+    if (typeof value === "string") {
+      const date = new Date(value);
+      if (!isNaN(date.getTime())) return date;
+      return undefined;
+    }
     if (value instanceof Date) return value;
     if (value instanceof ExifDateTime) return value.toDate();
     if (value instanceof ExifDate) return value.toDate();

@@ -6,9 +6,11 @@ import { createReadStream } from "fs";
 import { AdaptiveExtractionJob } from "./src/jobs/AdaptiveExtractionJob";
 import { MetadataExtractionJob } from "./src/jobs/MetadataExtractionJob";
 import { FileStatsJob } from "./src/jobs/FileStatsJob";
-import { Injectable } from "@tsed/di";
+import { Injectable, ProviderScope } from "@tsed/di";
 
-@Injectable()
+@Injectable({
+  scope: ProviderScope.SINGLETON,
+})
 export class MediaProcessor {
   constructor(
     private exiftool: ExifTool,

@@ -5,10 +5,12 @@ import {
 } from "../types";
 import { FileHashBaseJob } from "./FileHashBaseJob";
 import { MediaProcessor } from "../MediaProcessor";
-import { Injectable } from "@tsed/di";
+import { Injectable, ProviderScope } from "@tsed/di";
 import { MediaOrganizer } from "../../MediaOrganizer";
 
-@Injectable()
+@Injectable({
+  scope: ProviderScope.SINGLETON,
+})
 export class AdaptiveExtractionJob extends FileHashBaseJob<
   AdaptiveExtractionConfig,
   AdaptiveExtractionJobResult

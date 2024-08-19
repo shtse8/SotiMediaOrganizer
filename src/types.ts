@@ -59,17 +59,20 @@ export interface ProgramOptions {
   resolution: number;
   fps: number;
   maxFrames: number;
-  similarity: number;
   format: string;
   windowSize: number;
   stepSize: number;
   sceneChangeThreshold: number;
   maxChunkSize: number;
+
+  // similarity
+  imageSimilarityThreshold: number;
+  imageVideoSimilarityThreshold: number;
+  videoSimilarityThreshold: number;
 }
 
 export class AdaptiveExtractionConfig {
   readonly maxFrames: number;
-  readonly baseFrameRate: number;
   readonly sceneChangeThreshold: number;
   readonly resolution: number;
 }
@@ -81,9 +84,12 @@ export class FeatureExtractionConfig {
 }
 
 export class SimilarityConfig {
-  similarity: number;
   windowSize: number;
   stepSize: number;
+  readonly fps: number;
+  imageSimilarityThreshold: number;
+  imageVideoSimilarityThreshold: number;
+  videoSimilarityThreshold: number;
 }
 
 export class JobConfig {

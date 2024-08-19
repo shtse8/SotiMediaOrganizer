@@ -1,20 +1,32 @@
-import { Injectable } from "@tsed/di";
+import { Injectable, ProviderScope } from "@tsed/di";
 import {
   AdaptiveExtractionConfig,
+  AdaptiveExtractionJobResult,
   type DeduplicationResult,
   type FileInfo,
+  FrameInfo,
   SimilarityConfig,
 } from "./src/types";
 import { VPTree } from "./VPTree";
 import { MediaProcessor } from "./src/MediaProcessor";
 
-@Injectable()
+@Injectable({
+  scope: ProviderScope.SINGLETON,
+})
 export class MediaComparator {
+  private minThreshold: number;
+
   constructor(
     private extractor: MediaProcessor,
     private similarityConfig: SimilarityConfig,
     private adaptiveExtractionConfig: AdaptiveExtractionConfig,
-  ) {}
+  ) {
+    this.minThreshold = Math.min(
+      this.similarityConfig.imageSimilarityThreshold,
+      this.similarityConfig.imageVideoSimilarityThreshold,
+      this.similarityConfig.videoSimilarityThreshold,
+    );
+  }
 
   private hammingDistance(hash1: Buffer, hash2: Buffer): number {
     let distance = 0;
@@ -98,103 +110,6 @@ export class MediaComparator {
     }
 
     return minDistance;
-  }
-
-  private fastDtwDistance(
-    seq1: Buffer[],
-    seq2: Buffer[],
-    radius: number = 1,
-  ): number {
-    const distFn = (a: Buffer, b: Buffer) => this.hammingDistance(a, b);
-    return this.fastDtw(seq1, seq2, radius, distFn);
-  }
-
-  private fastDtw(
-    seq1: Buffer[],
-    seq2: Buffer[],
-    radius: number,
-    distFn: (a: Buffer, b: Buffer) => number,
-  ): number {
-    const n = seq1.length;
-    const m = seq2.length;
-
-    if (radius < 1) radius = 1;
-    if (n < radius || m < radius) {
-      return this.dtwDistance(seq1, seq2);
-    }
-
-    const shrunkSeq1 = this.reduceByHalf(seq1);
-    const shrunkSeq2 = this.reduceByHalf(seq2);
-
-    const projectedWindow = this.fastDtw(
-      shrunkSeq1,
-      shrunkSeq2,
-      radius,
-      distFn,
-    );
-    const expandedWindow = this.expandWindow(
-      projectedWindow,
-      seq1.length,
-      seq2.length,
-      radius,
-    );
-
-    return this.dtwDistanceWithWindow(seq1, seq2, expandedWindow, distFn);
-  }
-
-  private reduceByHalf(seq: Buffer[]): Buffer[] {
-    return seq.filter((_, i) => i % 2 === 0);
-  }
-
-  private expandWindow(
-    window: number,
-    n: number,
-    m: number,
-    radius: number,
-  ): [number, number][] {
-    const expandedWindow: [number, number][] = [];
-    for (let i = 0; i < n; i++) {
-      for (
-        let j = Math.max(0, i - radius);
-        j <= Math.min(m - 1, i + radius);
-        j++
-      ) {
-        expandedWindow.push([i, j]);
-      }
-    }
-    return expandedWindow;
-  }
-
-  private dtwDistanceWithWindow(
-    seq1: Buffer[],
-    seq2: Buffer[],
-    window: [number, number][],
-    distFn: (a: Buffer, b: Buffer) => number,
-  ): number {
-    const n = seq1.length;
-    const m = seq2.length;
-    const dtw: number[][] = Array(n)
-      .fill(null)
-      .map(() => Array(m).fill(Infinity));
-    dtw[0][0] = distFn(seq1[0], seq2[0]);
-
-    for (const [i, j] of window) {
-      if (i > 0 && j > 0) {
-        dtw[i][j] =
-          distFn(seq1[i], seq2[j]) +
-          Math.min(
-            dtw[i - 1][j], // insertion
-            dtw[i][j - 1], // deletion
-            dtw[i - 1][j - 1], // match
-          );
-      } else if (i > 0) {
-        dtw[i][j] = distFn(seq1[i], seq2[j]) + dtw[i - 1][j];
-      } else if (j > 0) {
-        dtw[i][j] = distFn(seq1[i], seq2[j]) + dtw[i][j - 1];
-      }
-    }
-
-    return dtw[n - 1][m - 1];
   }
 
   selectRepresentatives<T>(cluster: T[], selector: (node: T) => FileInfo): T[] {
@@ -282,27 +197,140 @@ export class MediaComparator {
     return score;
   }
 
+  private calculateSimilarity(
+    media1: AdaptiveExtractionJobResult,
+    media2: AdaptiveExtractionJobResult,
+  ): number {
+    const isImage1 = media1.duration === 0;
+    const isImage2 = media2.duration === 0;
+
+    if (isImage1 && isImage2) {
+      // Image to image comparison
+      return this.calculateImageSimilarity(media1.frames[0], media2.frames[0]);
+    } else if (isImage1 || isImage2) {
+      // Image to video comparison
+      return this.calculateImageVideoSimilarity(
+        isImage1 ? media1 : media2,
+        isImage1 ? media2 : media1,
+      );
+    } else {
+      // Video to video comparison
+      return this.calculateVideoSimilarity(media1, media2);
+    }
+  }
+
+  private calculateImageSimilarity(
+    frame1: FrameInfo,
+    frame2: FrameInfo,
+  ): number {
+    const distance = this.hammingDistance(frame1.hash, frame2.hash);
+    const maxDistance = frame1.hash.length * 8; // Maximum possible Hamming distance
+    return 1 - distance / maxDistance;
+  }
+
+  private calculateImageVideoSimilarity(
+    image: AdaptiveExtractionJobResult,
+    video: AdaptiveExtractionJobResult,
+  ): number {
+    let bestSimilarity = 0;
+    for (const frame of video.frames) {
+      const similarity = this.calculateImageSimilarity(image.frames[0], frame);
+      if (similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+      }
+    }
+    return bestSimilarity;
+  }
+
+  private calculateVideoSimilarity(
+    media1: AdaptiveExtractionJobResult,
+    media2: AdaptiveExtractionJobResult,
+  ): number {
+    const maxDuration = Math.max(media1.duration, media2.duration);
+    const minDuration = Math.min(media1.duration, media2.duration);
+
+    let bestSimilarity = 0;
+    const windowDuration = Math.min(
+      this.similarityConfig.windowSize,
+      minDuration,
+    );
+
+    // Slide a time window over the longer video
+    for (
+      let startTime = 0;
+      startTime <= maxDuration - windowDuration;
+      startTime += this.similarityConfig.stepSize
+    ) {
+      const endTime = startTime + windowDuration;
+
+      const subseq1 = this.getFramesInTimeRange(media1, startTime, endTime);
+      const subseq2 = this.getFramesInTimeRange(media2, startTime, endTime);
+
+      if (subseq1.length > 0 && subseq2.length > 0) {
+        const distance = this.dtw(subseq1, subseq2);
+        const similarity =
+          1 -
+          distance /
+            (this.adaptiveExtractionConfig.resolution *
+              this.adaptiveExtractionConfig.resolution *
+              Math.max(subseq1.length, subseq2.length));
+
+        if (similarity > bestSimilarity) {
+          bestSimilarity = similarity;
+        }
+      }
+    }
+
+    // Adjust similarity based on duration difference
+    const durationRatio = minDuration / maxDuration;
+
+    return bestSimilarity * durationRatio;
+  }
+
+  private getFramesInTimeRange(
+    media: AdaptiveExtractionJobResult,
+    startTime: number,
+    endTime: number,
+  ): FrameInfo[] {
+    return media.frames.filter(
+      (frame) => frame.timestamp >= startTime && frame.timestamp <= endTime,
+    );
+  }
+
+  private dtw(seq1: FrameInfo[], seq2: FrameInfo[]): number {
+    const m = seq1.length;
+    const n = seq2.length;
+    const dtw: number[][] = Array(m + 1)
+      .fill(null)
+      .map(() => Array(n + 1).fill(Infinity));
+    dtw[0][0] = 0;
+
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cost = this.hammingDistance(seq1[i - 1].hash, seq2[j - 1].hash);
+        const timeDiff = Math.abs(
+          seq1[i - 1].timestamp - seq2[j - 1].timestamp,
+        );
+        const timeWeight = Math.exp(-timeDiff / this.similarityConfig.stepSize);
+        dtw[i][j] =
+          cost * timeWeight +
+          Math.min(
+            dtw[i - 1][j], // insertion
+            dtw[i][j - 1], // deletion
+            dtw[i - 1][j - 1], // match
+          );
+      }
+    }
+
+    return dtw[m][n];
+  }
+
   cluster<T>(nodes: T[], selector: (node: T) => FileInfo): T[][] {
     const vpTree = new VPTree(nodes, (a, b) => {
-      const framesA = this.extractor
-        .getAdaptiveVideoFrames(
-          selector(a).media.frames,
-          selector(a).media.duration,
-        )
-        .map((x) => x.hash);
-      const framesB = this.extractor
-        .getAdaptiveVideoFrames(
-          selector(b).media.frames,
-          selector(b).media.duration,
-        )
-        .map((x) => x.hash);
-      return (
-        this.fastDtwDistance(
-          framesA,
-          framesB,
-          this.similarityConfig.windowSize,
-        ) / Math.max(framesA.length, framesB.length)
-      );
+      const d =
+        1 - this.calculateSimilarity(selector(a).media, selector(b).media);
+      // console.log('distance', d);
+      return d;
     });
 
     const similarityMap = new Map<T, Set<T>>();
@@ -330,16 +358,35 @@ export class MediaComparator {
     vpTree: VPTree<T>,
   ): T[] {
     const neighbors = vpTree.nearestNeighbors(node, {
-      distance:
-        this.adaptiveExtractionConfig.resolution *
-        this.adaptiveExtractionConfig.resolution *
-        (1 - this.similarityConfig.similarity),
-      // distance: this.adaptiveExtractionConfig.resolution * this.adaptiveExtractionConfig.resolution * (1 - this.similarityConfig.similarity),
+      distance: 1 - this.minThreshold,
     });
 
     return neighbors
-      .filter((neighbor) => neighbor.node !== node)
+      .filter((neighbor) => {
+        const similarity = 1 - neighbor.distance;
+        const threshold = this.getAdaptiveThreshold(
+          selector(node).media,
+          selector(neighbor.node).media,
+        );
+        return similarity >= threshold;
+      })
       .map((neighbor) => neighbor.node);
+  }
+
+  private getAdaptiveThreshold(
+    media1: AdaptiveExtractionJobResult,
+    media2: AdaptiveExtractionJobResult,
+  ): number {
+    const isImage1 = media1.duration === 0;
+    const isImage2 = media2.duration === 0;
+
+    if (isImage1 && isImage2) {
+      return this.similarityConfig.imageSimilarityThreshold;
+    } else if (isImage1 || isImage2) {
+      return this.similarityConfig.imageVideoSimilarityThreshold;
+    } else {
+      return this.similarityConfig.videoSimilarityThreshold;
+    }
   }
 
   private expandCluster<T>(

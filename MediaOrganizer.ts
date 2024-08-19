@@ -29,9 +29,11 @@ import path from "path";
 import { Spinner } from "@topcli/spinner";
 import { MediaComparator } from "./MediaComparator";
 import { MediaProcessor } from "./MediaProcessor";
-import { Injectable } from "@tsed/di";
+import { Injectable, ProviderScope } from "@tsed/di";
 
-@Injectable()
+@Injectable({
+  scope: ProviderScope.SINGLETON,
+})
 export class MediaOrganizer {
   constructor(
     private processor: MediaProcessor,
@@ -409,8 +411,15 @@ export class MediaOrganizer {
 
       const formatFileSize = (size: number) =>
         `${(size / (1024 * 1024)).toFixed(2)} MB`;
-      const formatDate = (date?: Date) =>
-        date ? date.toDateString() : "Unknown";
+      const formatDate = (date?: Date) => {
+        if (!date) return "Unknown";
+        // if invalid date, return "Invalid Date"
+        if (isNaN(date.getTime())) {
+          console.log("Invalid Date", date);
+          return "Invalid Date";
+        }
+        return date.toDateString();
+      };
       const formatDuration = (duration: number) => {
         const seconds = Math.floor((duration / 1000) % 60);
         const minutes = Math.floor((duration / (1000 * 60)) % 60);

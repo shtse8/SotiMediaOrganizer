@@ -1,11 +1,13 @@
 import { stat } from "fs/promises";
 import { FileStats, FileStatsConfig } from "../types";
-import { Injectable } from "@tsed/di";
+import { Injectable, ProviderScope } from "@tsed/di";
 import { createHash, Hash } from "crypto";
 import { createReadStream } from "fs";
 import { BaseFileInfoJob } from "./BaseFileInfoJob";
 
-@Injectable()
+@Injectable({
+  scope: ProviderScope.SINGLETON,
+})
 export class FileStatsJob extends BaseFileInfoJob<FileStatsConfig, FileStats> {
   constructor(config: FileStatsConfig) {
     super("fileStats", config);

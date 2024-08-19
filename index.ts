@@ -14,6 +14,7 @@ import { MediaOrganizer } from "./MediaOrganizer";
 import os from "os";
 import { ExifTool } from "exiftool-vendored";
 import { Context } from "./src/contexts/Context";
+import { ProviderScope } from "@tsed/di";
 
 function exitHandler() {
   console.log(chalk.red("\nSotiMediaOrganizer was interrupted"));
@@ -53,25 +54,19 @@ async function main() {
       "-r, --resolution <number>",
       "Resolution for perceptual hashing",
       parseInt,
-      64,
+      32,
     )
     .option(
       "-f, --fps <number>",
       "Frames per second to extract from videos for perceptual hashing",
       parseInt,
-      5,
+      1,
     )
     .option(
       "-x, --max-frames <number>",
       "Maximum number of frames to extract from videos for perceptual hashing",
       parseInt,
       100,
-    )
-    .option(
-      "-s, --similarity <number>",
-      "Similarity threshold for perceptual hashing",
-      parseFloat,
-      0.99,
     )
     .option(
       "-w, --window-size <number>",
@@ -95,6 +90,24 @@ async function main() {
       "Threshold for scene change detection",
       parseFloat,
       0.01,
+    )
+    .option(
+      "--similar-image-threshold <number>",
+      "Threshold for image similarity (default: 0.99)",
+      parseFloat,
+      0.99,
+    )
+    .option(
+      "--similar-image-video-threshold <number>",
+      "Threshold for image-video similarity. For image-video, we use a lower threshold because the frames are not always the same (default: 0.98)",
+      parseFloat,
+      0.98,
+    )
+    .option(
+      "--similar-video-threshold <number>",
+      "Threshold for video similarity. For video similarity, we use an even lower threshold because the frames are not always the same (default: 0.97)",
+      parseFloat,
+      0.97,
     )
     .option(
       "--max-chunk-size <number>",
@@ -149,21 +162,23 @@ async function main() {
   const injector = Context.InjectorService;
 
   injector.add(FileStatsConfig, {
+    scope: ProviderScope.SINGLETON,
     useValue: {
       chunkSize: options.maxChunkSize,
     },
   });
 
   injector.addProvider(AdaptiveExtractionConfig, {
+    scope: ProviderScope.SINGLETON,
     useValue: {
       maxFrames: options.maxFrames,
-      baseFrameRate: options.fps,
       sceneChangeThreshold: options.sceneChangeThreshold,
       resolution: options.resolution,
     },
   });
 
   injector.add(FeatureExtractionConfig, {
+    scope: ProviderScope.SINGLETON,
     useValue: {
       colorHistogramBins: 16,
       edgeDetectionThreshold: 50,
@@ -171,14 +186,19 @@ async function main() {
   });
 
   injector.add(SimilarityConfig, {
+    scope: ProviderScope.SINGLETON,
     useValue: {
-      similarity: options.similarity,
       windowSize: options.windowSize,
       stepSize: options.stepSize,
+      fps: options.fps,
+      imageSimilarityThreshold: options.imageSimilarityThreshold,
+      imageVideoSimilarityThreshold: options.imageVideoSimilarityThreshold,
+      videoSimilarityThreshold: options.videoSimilarityThreshold,
     },
   });
 
   injector.add(ExifTool, {
+    scope: ProviderScope.SINGLETON,
     useFactory: () => new ExifTool(),
   });
 

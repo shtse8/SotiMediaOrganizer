@@ -1,12 +1,22 @@
 import sharp from "sharp";
 import ffmpeg from "fluent-ffmpeg";
-import { AdaptiveExtractionConfig, FileType, FrameInfo } from "./types";
-import { Injectable } from "@tsed/di";
+import {
+  AdaptiveExtractionConfig,
+  FileType,
+  FrameInfo,
+  SimilarityConfig,
+} from "./types";
+import { Injectable, ProviderScope } from "@tsed/di";
 import { MediaOrganizer } from "../MediaOrganizer";
 
-@Injectable()
+@Injectable({
+  scope: ProviderScope.SINGLETON,
+})
 export class MediaProcessor {
-  constructor(private config: AdaptiveExtractionConfig) {}
+  constructor(
+    private config: AdaptiveExtractionConfig,
+    private similarityConfig: SimilarityConfig,
+  ) {}
 
   extractFrames(filePath: string): Promise<FrameInfo[]> {
     const mediaType = MediaOrganizer.getFileType(filePath);
@@ -32,10 +42,13 @@ export class MediaProcessor {
   }
 
   private async extractVideoFrames(videoPath: string): Promise<FrameInfo[]> {
-    return this.detectSceneChanges(videoPath);
+    return this.detectSceneChanges(videoPath, this.config.sceneChangeThreshold);
   }
 
-  public async detectSceneChanges(videoPath: string): Promise<FrameInfo[]> {
+  public async detectSceneChanges(
+    videoPath: string,
+    sceneChangeThreshold: number,
+  ): Promise<FrameInfo[]> {
     return new Promise((resolve, reject) => {
       const keyFrames: FrameInfo[] = [];
       let currentBuffer: Buffer = Buffer.alloc(0);
@@ -44,7 +57,7 @@ export class MediaProcessor {
 
       ffmpeg(videoPath)
         .videoFilters([
-          `select='eq(n,0)+gt(scene,${this.config.sceneChangeThreshold})'`,
+          `select='eq(n,0)+gt(scene,${sceneChangeThreshold})'`,
           `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=disable`,
           "format=gray",
         ])
@@ -109,15 +122,15 @@ export class MediaProcessor {
     keyFrames: FrameInfo[],
     duration: number,
   ): FrameInfo[] {
+    // return keyFrames;
     if (keyFrames.length === 0) {
       throw new Error("No key frames provided");
     }
-    // return keyFrames;
     const frames: FrameInfo[] = [];
     let nextSceneChange = 0;
     const frameCount = Math.max(
       1,
-      Math.ceil(duration * this.config.baseFrameRate),
+      Math.ceil(duration * this.similarityConfig.fps),
     );
 
     for (let i = 0; i < frameCount; i++) {
@@ -135,6 +148,18 @@ export class MediaProcessor {
       });
     }
 
+    if (frames.length > keyFrames.length) {
+      console.log("duration", duration);
+      console.log("frameCount", frameCount);
+      console.log(
+        "keyFrames",
+        keyFrames.map((k) => k.timestamp),
+      );
+      console.log(
+        "frames",
+        frames.map((f) => f.timestamp),
+      );
+    }
     return frames;
   }
 
