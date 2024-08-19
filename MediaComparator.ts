@@ -123,56 +123,78 @@ export class MediaComparator {
       return this.dtwDistance(seq1, seq2);
     }
 
-    const nShrunk = Math.floor(n / 2);
-    const mShrunk = Math.floor(m / 2);
     const shrunkSeq1 = this.reduceByHalf(seq1);
     const shrunkSeq2 = this.reduceByHalf(seq2);
 
-    const window = this.fastDtw(shrunkSeq1, shrunkSeq2, radius, distFn);
-    return this.dtwDistanceWithWindow(seq1, seq2, window, radius, distFn);
+    const projectedWindow = this.fastDtw(
+      shrunkSeq1,
+      shrunkSeq2,
+      radius,
+      distFn,
+    );
+    const expandedWindow = this.expandWindow(
+      projectedWindow,
+      seq1.length,
+      seq2.length,
+      radius,
+    );
+
+    return this.dtwDistanceWithWindow(seq1, seq2, expandedWindow, distFn);
   }
 
   private reduceByHalf(seq: Buffer[]): Buffer[] {
     return seq.filter((_, i) => i % 2 === 0);
   }
 
+  private expandWindow(
+    window: number,
+    n: number,
+    m: number,
+    radius: number,
+  ): [number, number][] {
+    const expandedWindow: [number, number][] = [];
+    for (let i = 0; i < n; i++) {
+      for (
+        let j = Math.max(0, i - radius);
+        j <= Math.min(m - 1, i + radius);
+        j++
+      ) {
+        expandedWindow.push([i, j]);
+      }
+    }
+    return expandedWindow;
+  }
+
   private dtwDistanceWithWindow(
     seq1: Buffer[],
     seq2: Buffer[],
-    window: number,
-    radius: number,
+    window: [number, number][],
     distFn: (a: Buffer, b: Buffer) => number,
   ): number {
     const n = seq1.length;
     const m = seq2.length;
-    const windowSize = Math.max(window, Math.abs(n - m) + 2 * radius);
+    const dtw: number[][] = Array(n)
+      .fill(null)
+      .map(() => Array(m).fill(Infinity));
+    dtw[0][0] = distFn(seq1[0], seq2[0]);
 
-    const dtw: number[][] = [new Array(m + 1).fill(Infinity)];
-
-    for (let i = 1; i <= n; i++) {
-      const prevRow = dtw[dtw.length - 1];
-      const currentRow = new Array(m + 1).fill(Infinity);
-      currentRow[0] = Infinity;
-
-      const jStart = Math.max(1, i - windowSize);
-      const jStop = Math.min(m, i + windowSize);
-
-      for (let j = jStart; j <= jStop; j++) {
-        const cost = distFn(seq1[i - 1], seq2[j - 1]);
-        currentRow[j] =
-          cost +
+    for (const [i, j] of window) {
+      if (i > 0 && j > 0) {
+        dtw[i][j] =
+          distFn(seq1[i], seq2[j]) +
           Math.min(
-            prevRow[j], // insertion
-            currentRow[j - 1], // deletion
-            prevRow[j - 1], // match
+            dtw[i - 1][j], // insertion
+            dtw[i][j - 1], // deletion
+            dtw[i - 1][j - 1], // match
           );
+      } else if (i > 0) {
+        dtw[i][j] = distFn(seq1[i], seq2[j]) + dtw[i - 1][j];
+      } else if (j > 0) {
+        dtw[i][j] = distFn(seq1[i], seq2[j]) + dtw[i][j - 1];
       }
-
-      dtw.push(currentRow);
-      if (dtw.length > 2) dtw.shift(); // Keep only two rows in memory
     }
 
-    return dtw[dtw.length - 1][m];
+    return dtw[n - 1][m - 1];
   }
 
   selectRepresentatives<T>(cluster: T[], selector: (node: T) => FileInfo): T[] {
