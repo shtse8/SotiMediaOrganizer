@@ -44,11 +44,11 @@ export class MediaProcessor {
 
       ffmpeg(videoPath)
         .videoFilters([
-          `select='gt(scene,${this.config.sceneChangeThreshold})'`,
+          `select='eq(n,0)+gt(scene,${this.config.sceneChangeThreshold})'`,
           `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=disable`,
           "format=gray",
         ])
-        .outputOptions(["-f rawvideo", "-pix_fmt gray"])
+        .outputOptions(["-vsync vfr", "-f rawvideo", "-pix_fmt gray"])
         .on("stderr", (stderrLine: string) => {
           const match = stderrLine.match(/time=(\d{2}:\d{2}:\d{2}\.\d{2})/);
           if (match) {
@@ -70,7 +70,7 @@ export class MediaProcessor {
           }
 
           if (keyFrames.length === 0) {
-            console.error("No key frames detected");
+            console.error("No key frames detected", videoPath);
             reject(new Error("No key frames detected"));
           }
           resolve(keyFrames);

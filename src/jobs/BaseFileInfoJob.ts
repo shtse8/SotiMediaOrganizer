@@ -49,7 +49,16 @@ export abstract class BaseFileInfoJob<TConfig, TResult> {
 
   protected abstract processFile(filePath: string): Promise<TResult>;
 
-  protected isConfigValid(filePath: string, cachedConfig: TConfig): boolean {
+  protected isConfigValid(
+    filePath: string,
+    cachedConfig?: TConfig | undefined,
+  ): boolean {
+    if (!cachedConfig && !this.config) {
+      return true;
+    }
+    if (!cachedConfig || !this.config) {
+      return false;
+    }
     return this.isEquivalentConfig(this.config, cachedConfig);
   }
 

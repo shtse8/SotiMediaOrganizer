@@ -35,12 +35,12 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 
   protected isConfigValid(
     filePath: string,
-    cachedConfig: AdaptiveExtractionConfig,
+    cachedConfig: AdaptiveExtractionConfig | undefined,
   ): boolean {
     const fileType = MediaOrganizer.getFileType(filePath);
     if (fileType === FileType.Image) {
       // for images, we only need to check the resolution
-      return cachedConfig.resolution === this.config.resolution;
+      return cachedConfig?.resolution === this.config.resolution;
     } else {
       return super.isConfigValid(filePath, cachedConfig);
     }
