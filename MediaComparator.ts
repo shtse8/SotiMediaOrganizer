@@ -7,7 +7,7 @@ import {
   SimilarityConfig,
 } from "./src/types";
 import { VPTree } from "./VPTree";
-import { hammingDistanceSIMD } from "./build/release";
+import { hammingDistanceSIMD } from "./build";
 
 @Injectable({
   scope: ProviderScope.SINGLETON,

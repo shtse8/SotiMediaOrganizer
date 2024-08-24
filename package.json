@@ -12,16 +12,15 @@
   },
   "scripts": {
     "start": "bun run index.ts",
-    "build": "bun build index.ts --outdir dist --target node --external lmdb --external sharp --external exiftool-vendored --external fluent-ffmpeg --minify",
+    "build": "bun build index.ts --outdir dist --target node --external lmdb --external sharp --external exiftool-vendored --external fluent-ffmpeg --minify && bun run asbuild:release && cp build/index.wasm dist/index.wasm",
     "start:node": "node dist/index.js",
     "test": "node tests",
     "prepare": "husky",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
     "lint": "eslint .",
-    "asbuild:debug": "asc assembly/index.ts --enable simd --target debug",
-    "asbuild:release": "asc assembly/index.ts --enable simd --target release",
-    "asbuild": "bun run asbuild:debug && bun run asbuild:release"
+    "asbuild": "asc assembly/index.ts --enable simd --target debug --outFile build/index.wasm",
+    "asbuild:release": "asc assembly/index.ts --enable simd --target release --outFile build/index.wasm"
   },
   "author": "shtse8",
   "license": "MIT",
