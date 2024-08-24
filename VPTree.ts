@@ -1,5 +1,3 @@
-import { MaxHeap } from "@datastructures-js/heap";
-
 interface VPNode<T> {
   point: T;
   threshold: number;
@@ -10,6 +8,7 @@ interface VPNode<T> {
 interface SearchOptions {
   k?: number;
   maxDistance?: number;
+  sort?: boolean;
 }
 
 export interface SearchResult<T> {
@@ -79,83 +78,52 @@ export class VPTree<T> {
     }
   }
 
-  nearestNeighbors(query: T, options: SearchOptions = {}): SearchResult<T>[] {
-    const k = options.k || Infinity;
-    const maxDistance = options.maxDistance || Infinity;
+  search(query: T, options: SearchOptions = {}): SearchResult<T>[] {
+    const k = options.k ?? Infinity;
+    const maxDistance = options.maxDistance ?? Infinity;
+    const sort = options.sort ?? true;
 
-    const maxHeap = new MaxHeap<SearchResult<T>>((x) => x.distance);
-    this.search(this.root, query, k, maxDistance, maxHeap);
+    if (k === 0 || maxDistance === 0) {
+      return [];
+    }
 
-    return maxHeap.sort();
+    let results: SearchResult<T>[] = [];
+    this.searchTree(this.root, query, maxDistance, results);
+
+    if (sort) {
+      results.sort((a, b) => a.distance - b.distance);
+    }
+
+    if (k < Infinity && results.length > k) {
+      results = results.slice(0, k);
+    }
+
+    return results;
   }
 
-  private search(
+  private searchTree(
     node: VPNode<T> | null,
     query: T,
-    k: number,
     maxDistance: number,
-    maxHeap: MaxHeap<SearchResult<T>>,
-  ): void {
-    if (node === null) return;
-
-    const dist = this.distance(query, node.point);
-
-    if (dist <= maxDistance) {
-      if (maxHeap.size() < k) {
-        maxHeap.push({ point: node.point, distance: dist });
-        // Update maxDistance only if we've reached k elements
-        if (maxHeap.size() === k) {
-          maxDistance = maxHeap.top()!.distance;
-        }
-      } else if (dist < maxHeap.top()!.distance) {
-        maxHeap.pop(); // Remove the farthest before pushing the new point
-        maxHeap.push({ point: node.point, distance: dist });
-        // Update maxDistance with the new farthest distance
-        maxDistance = maxHeap.top()!.distance;
-      }
-    }
-
-    // Update maxDistance if we have k elements
-    if (maxHeap.size() === k) {
-      maxDistance = Math.min(maxDistance, maxHeap.top()!.distance);
-    }
-
-    const searchBoth =
-      maxDistance + dist >= node.threshold &&
-      dist - maxDistance <= node.threshold;
-    const searchLeft = dist < node.threshold || searchBoth;
-    const searchRight = dist >= node.threshold || searchBoth;
-
-    if (searchLeft) this.search(node.left, query, k, maxDistance, maxHeap);
-    if (searchRight) this.search(node.right, query, k, maxDistance, maxHeap);
-  }
-
-  // New method for range search
-  rangeSearch(query: T, radius: number): SearchResult<T>[] {
-    const results: SearchResult<T>[] = [];
-    this.rangeSearchHelper(this.root, query, radius, results);
-    return results.sort((a, b) => a.distance - b.distance);
-  }
-
-  private rangeSearchHelper(
-    node: VPNode<T> | null,
-    query: T,
-    radius: number,
     results: SearchResult<T>[],
   ): void {
     if (node === null) return;
 
     const dist = this.distance(query, node.point);
 
-    if (dist <= radius) {
+    if (dist <= maxDistance) {
       results.push({ point: node.point, distance: dist });
     }
 
-    if (dist - radius <= node.threshold) {
-      this.rangeSearchHelper(node.left, query, radius, results);
+    const distLowerBound = dist - maxDistance;
+    const distUpperBound = dist + maxDistance;
+
+    if (distLowerBound <= node.threshold) {
+      this.searchTree(node.left, query, maxDistance, results);
     }
-    if (dist + radius >= node.threshold) {
-      this.rangeSearchHelper(node.right, query, radius, results);
+
+    if (distUpperBound >= node.threshold) {
+      this.searchTree(node.right, query, maxDistance, results);
     }
   }
 }

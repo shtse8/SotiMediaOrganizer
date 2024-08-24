@@ -109,7 +109,7 @@ async function main() {
       "--image-similarity-threshold <number>",
       "Threshold for image similarity (default: 0.99)",
       parseFloat,
-      0.99,
+      0.98,
     )
     .option(
       "--image-video-similarity-threshold <number>",

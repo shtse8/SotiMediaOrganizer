@@ -60,6 +60,21 @@ export class MediaComparator {
     files: T[],
     selector: (node: T) => FileInfo,
   ): DeduplicationResult<T> {
+    console.time("VPTree Construction");
+    const vpTree = new VPTree<T>(
+      files,
+      (a, b) =>
+        1 - this.calculateSimilarity(selector(a).media, selector(b).media),
+    );
+    console.timeEnd("VPTree Construction");
+
+    console.time("Clustering");
+    const { clusters, stats } = this.dbscan(files, vpTree, selector);
+    console.timeEnd("Clustering");
+
+    console.log("DBSCAN Stats:", stats);
+
+    console.time("Processing Results");
     const uniqueFiles = new Set<T>();
     const duplicateSets: Array<{
       bestFile: T;
@@ -67,34 +82,143 @@ export class MediaComparator {
       duplicates: Set<T>;
     }> = [];
 
-    const clusters = this.cluster(files, selector);
-
     for (const cluster of clusters) {
-      if (cluster.length === 1) {
-        uniqueFiles.add(cluster[0]);
+      if (cluster.size === 1) {
+        uniqueFiles.add(cluster.values().next().value);
+      } else {
+        const clusterArray = Array.from(cluster);
+        const representatives = this.selectRepresentatives(
+          clusterArray,
+          selector,
+        );
+        const representativeSet = new Set(representatives);
+        const duplicateSet = new Set(
+          clusterArray.filter((f) => !representativeSet.has(f)),
+        );
+
+        duplicateSets.push({
+          bestFile: representatives[0],
+          representatives: representativeSet,
+          duplicates: duplicateSet,
+        });
+      }
+    }
+    console.timeEnd("Processing Results");
+
+    console.log("\n\n");
+
+    return { uniqueFiles, duplicateSets };
+  }
+
+  private dbscan<T>(
+    files: T[],
+    vpTree: VPTree<T>,
+    selector: (node: T) => FileInfo,
+  ): {
+    clusters: Set<T>[];
+    stats: {
+      totalFiles: number;
+      totalSearches: number;
+      totalValidNeighbors: number;
+      largestClusterSize: number;
+      totalClusterExpansions: number;
+      averageValidNeighbors: number;
+    };
+  } {
+    const eps = 1 - this.minThreshold;
+    const minPts = 2;
+    const visited = new Set<T>();
+    const clusters: Set<T>[] = [];
+    const stats = {
+      totalFiles: files.length,
+      totalSearches: 0,
+      totalValidNeighbors: 0,
+      largestClusterSize: 0,
+      totalClusterExpansions: 0,
+      averageValidNeighbors: 0,
+    };
+
+    for (const file of files) {
+      if (visited.has(file)) continue;
+
+      visited.add(file);
+      const neighbors = this.getValidNeighbors(file, vpTree, selector, eps);
+      stats.totalSearches++;
+      stats.totalValidNeighbors += neighbors.length;
+
+      if (neighbors.length < minPts) {
+        clusters.push(new Set([file]));
         continue;
       }
 
-      const representatives = this.selectRepresentatives(cluster, selector);
-      const representativeSet = new Set(representatives);
-      const duplicateSet = new Set(
-        cluster.filter((file) => !representativeSet.has(file)),
-      );
+      const cluster = new Set<T>([file]);
+      const stack = [...neighbors];
 
-      duplicateSets.push({
-        bestFile: representatives[0],
-        representatives: representativeSet,
-        duplicates: duplicateSet,
-      });
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (visited.has(current)) continue;
+
+        visited.add(current);
+        cluster.add(current);
+
+        const currentNeighbors = this.getValidNeighbors(
+          current,
+          vpTree,
+          selector,
+          eps,
+        );
+        stats.totalSearches++;
+        stats.totalValidNeighbors += currentNeighbors.length;
+        stats.totalClusterExpansions++;
+
+        if (currentNeighbors.length >= minPts) {
+          for (const neighbor of currentNeighbors) {
+            if (!visited.has(neighbor)) {
+              stack.push(neighbor);
+            }
+          }
+        }
+      }
+
+      clusters.push(cluster);
+      stats.largestClusterSize = Math.max(
+        stats.largestClusterSize,
+        cluster.size,
+      );
     }
 
-    return { uniqueFiles, duplicateSets };
+    stats.averageValidNeighbors =
+      stats.totalValidNeighbors / stats.totalSearches;
+
+    return { clusters, stats };
+  }
+
+  private getValidNeighbors<T>(
+    file: T,
+    vpTree: VPTree<T>,
+    selector: (node: T) => FileInfo,
+    eps: number,
+  ): T[] {
+    const neighbors = vpTree.search(file, { maxDistance: eps, sort: false });
+    return neighbors
+      .filter((neighbor) => {
+        const similarity = 1 - neighbor.distance;
+        const threshold = this.getAdaptiveThreshold(
+          selector(file).media,
+          selector(neighbor.point).media,
+        );
+        return similarity >= threshold;
+      })
+      .map((n) => n.point);
   }
 
   private selectRepresentatives<T>(
     cluster: T[],
     selector: (node: T) => FileInfo,
   ): T[] {
+    if (cluster.length === 0) return [];
+    if (cluster.length === 1) return cluster;
+
     const sortedEntries = this.scoreEntries(cluster, selector);
     const bestEntry = sortedEntries[0];
     const bestFileInfo = selector(bestEntry);
@@ -298,49 +422,6 @@ export class MediaComparator {
     return 1 - dtw[n] / Math.max(m, n);
   }
 
-  cluster<T>(nodes: T[], selector: (node: T) => FileInfo): T[][] {
-    const vpTree = new VPTree<T>(
-      nodes,
-      (a, b) =>
-        1 - this.calculateSimilarity(selector(a).media, selector(b).media),
-    );
-
-    const clusters: T[][] = [];
-    const processedNodes = new Set<T>();
-
-    for (const node of nodes) {
-      if (!processedNodes.has(node)) {
-        const cluster = this.expandCluster(
-          node,
-          selector,
-          vpTree,
-          processedNodes,
-        );
-        clusters.push(cluster);
-      }
-    }
-
-    return clusters;
-  }
-
-  private findSimilarNodes<T>(
-    node: T,
-    selector: (node: T) => FileInfo,
-    vpTree: VPTree<T>,
-  ): T[] {
-    return vpTree
-      .nearestNeighbors(node, { maxDistance: 1 - this.minThreshold })
-      .filter((neighbor) => {
-        const similarity = 1 - neighbor.distance;
-        const threshold = this.getAdaptiveThreshold(
-          selector(node).media,
-          selector(neighbor.point).media,
-        );
-        return similarity >= threshold;
-      })
-      .map((neighbor) => neighbor.point);
-  }
-
   private getAdaptiveThreshold(media1: MediaInfo, media2: MediaInfo): number {
     const isImage1 = media1.duration === 0;
     const isImage2 = media2.duration === 0;
@@ -350,31 +431,5 @@ export class MediaComparator {
     if (isImage1 || isImage2)
       return this.similarityConfig.imageVideoSimilarityThreshold;
     return this.similarityConfig.videoSimilarityThreshold;
-  }
-
-  private expandCluster<T>(
-    node: T,
-    selector: (node: T) => FileInfo,
-    vpTree: VPTree<T>,
-    processedNodes: Set<T>,
-  ): T[] {
-    const cluster: T[] = [];
-    const queue: T[] = [node];
-    processedNodes.add(node);
-
-    while (queue.length > 0) {
-      const currentNode = queue.shift()!;
-      cluster.push(currentNode);
-
-      const similarNodes = this.findSimilarNodes(currentNode, selector, vpTree);
-      for (const similarNode of similarNodes) {
-        if (!processedNodes.has(similarNode)) {
-          queue.push(similarNode);
-          processedNodes.add(similarNode);
-        }
-      }
-    }
-
-    return cluster;
   }
 }
