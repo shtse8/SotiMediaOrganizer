@@ -7,6 +7,7 @@ import {
   SimilarityConfig,
 } from "./src/types";
 import { VPTree } from "./VPTree";
+import { hammingDistanceSIMD } from "./build/release";
 
 @Injectable({
   scope: ProviderScope.SINGLETON,
@@ -23,21 +24,23 @@ export class MediaComparator {
   }
 
   private hammingDistance(hash1: Buffer, hash2: Buffer): number {
-    let distance = 0;
-    const length = Math.min(hash1.length, hash2.length);
+    return hammingDistanceSIMD(hash1, hash2);
 
-    // Process 4 bytes at a time
-    for (let i = 0; i < length - 3; i += 4) {
-      const xor = (hash1.readUInt32LE(i) ^ hash2.readUInt32LE(i)) >>> 0;
-      distance += this.popcount32(xor);
-    }
+    // let distance = 0;
+    // const length = Math.min(hash1.length, hash2.length);
 
-    // Handle remaining bytes
-    for (let i = length - (length % 4); i < length; i++) {
-      distance += this.popcount8(hash1[i] ^ hash2[i]);
-    }
+    // // Process 4 bytes at a time
+    // for (let i = 0; i < length - 3; i += 4) {
+    //   const xor = (hash1.readUInt32LE(i) ^ hash2.readUInt32LE(i)) >>> 0;
+    //   distance += this.popcount32(xor);
+    // }
 
-    return distance;
+    // // Handle remaining bytes
+    // for (let i = length - (length % 4); i < length; i++) {
+    //   distance += this.popcount8(hash1[i] ^ hash2[i]);
+    // }
+
+    // return distance;
   }
 
   private popcount32(x: number): number {

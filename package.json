@@ -14,11 +14,14 @@
     "start": "bun run index.ts",
     "build": "bun build index.ts --outdir dist --target node --external lmdb --external sharp --external exiftool-vendored --external fluent-ffmpeg --minify",
     "start:node": "node dist/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node tests",
     "prepare": "husky",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "asbuild:debug": "asc assembly/index.ts --enable simd --target debug",
+    "asbuild:release": "asc assembly/index.ts --enable simd --target release",
+    "asbuild": "bun run asbuild:debug && bun run asbuild:release"
   },
   "author": "shtse8",
   "license": "MIT",
@@ -33,24 +36,25 @@
     "sharp": "^0.33.5"
   },
   "devDependencies": {
-    "prettier": "^3.3.3",
     "@datastructures-js/heap": "^4.3.3",
+    "@eslint/js": "^9.9.0",
     "@topcli/spinner": "^2.1.2",
+    "@types/bun": "latest",
     "@types/cli-progress": "^3.11.6",
+    "assemblyscript": "^0.27.29",
     "async-mutex": "^0.5.0",
     "chalk": "^5.3.0",
     "cli-progress": "^3.12.0",
     "commander": "^9.5.0",
-    "node-addon-api": "^8.1.0",
-    "node-gyp": "^10.2.0",
-    "lint-staged": "^15.2.9",
-    "@eslint/js": "^9.9.0",
-    "@types/bun": "latest",
     "eslint": "^9.9.0",
     "globals": "^15.9.0",
+    "husky": "^9.1.4",
+    "lint-staged": "^15.2.9",
+    "node-addon-api": "^8.1.0",
+    "node-gyp": "^10.2.0",
+    "prettier": "^3.3.3",
     "typescript": "^5.5.4",
-    "typescript-eslint": "^8.1.0",
-    "husky": "^9.1.4"
+    "typescript-eslint": "^8.1.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -73,5 +77,11 @@
     "date",
     "bun",
     "typescript"
-  ]
+  ],
+  "exports": {
+    ".": {
+      "import": "./build/release.js",
+      "types": "./build/release.d.ts"
+    }
+  }
 }
