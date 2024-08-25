@@ -88,8 +88,11 @@ export class MediaComparator {
     vpTree: VPTree<string>,
     progressCallback?: (progress: string) => void,
   ): Promise<Set<string>[]> {
-    const batchSize = 500;
-    const numWorkers = Math.max(files.length / batchSize, cpus().length - 1);
+    const batchSize = 2048;
+    const numWorkers = Math.min(
+      Math.ceil(files.length / batchSize),
+      cpus().length - 1,
+    );
 
     const workerPool = new WorkerPool(
       "./src/deduplicationWorker.js",

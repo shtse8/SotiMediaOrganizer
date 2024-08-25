@@ -138,29 +138,21 @@ export class WorkerPool extends EventEmitter {
     action: string,
   ): Promise<R[]> {
     const totalItems = items.length;
-    const results: R[] = [];
     let processedItems = 0;
+    const promises: Promise<R[]>[] = [];
 
     for (let i = 0; i < totalItems; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
       const batchPromise = this.addJob<T[], R[]>(action, batch);
 
-      batchPromise.then((batchResults) => {
-        results.push(...batchResults);
+      batchPromise.then(() => {
         processedItems += batch.length;
         this.emit("progress", { processed: processedItems, total: totalItems });
       });
+      promises.push(batchPromise);
     }
 
-    await Promise.all(
-      this.workers.map((worker) =>
-        worker.status === WorkerStatus.Busy
-          ? new Promise((resolve) => worker.once("jobCompleted", resolve))
-          : Promise.resolve(),
-      ),
-    );
-
-    return results;
+    return (await Promise.all(promises)).flat();
   }
 
   terminate(): void {
