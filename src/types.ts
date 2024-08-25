@@ -1,4 +1,5 @@
 import { Injectable } from "@tsed/di";
+import { VPNode } from "../VPTree";
 
 export enum FileType {
   Video,
@@ -50,7 +51,7 @@ export interface Stats {
   errorCount: number;
 }
 
-export interface ProgramOptions {
+export class ProgramOptions {
   error?: string;
   duplicate?: string;
   debug?: string;
@@ -110,7 +111,7 @@ export class MediaInfo {
 }
 
 export class FrameInfo {
-  hash: Buffer;
+  hash: SharedArrayBuffer;
   // data: Buffer;
   // features: Buffer;
   timestamp: number;
@@ -126,8 +127,18 @@ export class Metadata {
 }
 
 export class FileStats {
-  hash: Buffer;
+  hash: SharedArrayBuffer;
   size: number;
   createdAt: Date;
   modifiedAt: Date;
 }
+
+export interface WorkerData {
+  root: VPNode<string>;
+  fileInfoCache: Map<string, FileInfo>;
+  options: ProgramOptions;
+}
+
+export type MaybePromise<T> = T | Promise<T>;
+
+export type FileProcessor = (file: string) => Promise<FileInfo>;

@@ -9,7 +9,5 @@ export class DatabaseContext {
     path: ".mediadb",
     compression: true,
   });
-  constructor() {
-    console.log("DatabaseContext created");
-  }
+  constructor() {}
 }

@@ -1,3 +1,5 @@
+import { Context } from "../contexts/Context";
+import { sharedArrayBufferToHex } from "../utils";
 import { BaseFileInfoJob } from "./BaseFileInfoJob";
 import { FileStatsJob } from "./FileStatsJob";
 
@@ -6,8 +8,8 @@ export abstract class FileHashBaseJob<TConfig, TResult> extends BaseFileInfoJob<
   TResult
 > {
   protected async getHashKey(filePath: string): Promise<string> {
-    const fileStatsJob = this.injector.get<FileStatsJob>(FileStatsJob)!;
+    const fileStatsJob = Context.injector.get<FileStatsJob>(FileStatsJob)!;
     const result = await fileStatsJob.process(filePath);
-    return result.hash.toString("hex");
+    return sharedArrayBufferToHex(result.hash);
   }
 }

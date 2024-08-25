@@ -1,4 +1,6 @@
-interface VPNode<T> {
+import { MaybePromise } from "./src/types";
+
+export interface VPNode<T> {
   point: T;
   threshold: number;
   left: VPNode<T> | null;
@@ -17,16 +19,23 @@ export interface SearchResult<T> {
 }
 
 export class VPTree<T> {
-  private root: VPNode<T> | null = null;
-
   constructor(
+    private root: VPNode<T> | null,
+    private distance: (a: T, b: T) => MaybePromise<number>,
+  ) {}
+
+  static async build<T>(
     points: T[],
-    private distance: (a: T, b: T) => number,
-  ) {
-    this.root = this.buildSubtree(points);
+    distance: (a: T, b: T) => MaybePromise<number>,
+  ): Promise<VPTree<T>> {
+    const root = await VPTree.buildSubtree(points, distance);
+    return new VPTree(root, distance);
   }
 
-  private buildSubtree(points: T[]): VPNode<T> | null {
+  private static async buildSubtree<T>(
+    points: T[],
+    distance: (a: T, b: T) => MaybePromise<number>,
+  ): Promise<VPNode<T> | null> {
     if (points.length === 0) return null;
 
     const vantagePointIndex = Math.floor(Math.random() * points.length);
@@ -38,7 +47,9 @@ export class VPTree<T> {
       return { point: vantagePoint, threshold: 0, left: null, right: null };
     }
 
-    const distances = points.map((p) => this.distance(vantagePoint, p));
+    const distances = await Promise.all(
+      points.map((p) => distance(vantagePoint, p)),
+    );
     const medianIndex = Math.floor(points.length / 2);
     const threshold = this.quickSelect(distances, medianIndex);
 
@@ -56,12 +67,12 @@ export class VPTree<T> {
     return {
       point: vantagePoint,
       threshold,
-      left: this.buildSubtree(leftPoints),
-      right: this.buildSubtree(rightPoints),
+      left: await this.buildSubtree(leftPoints, distance),
+      right: await this.buildSubtree(rightPoints, distance),
     };
   }
 
-  private quickSelect(arr: number[], k: number): number {
+  private static quickSelect(arr: number[], k: number): number {
     if (arr.length === 1) return arr[0];
 
     const pivot = arr[Math.floor(Math.random() * arr.length)];
@@ -78,7 +89,10 @@ export class VPTree<T> {
     }
   }
 
-  search(query: T, options: SearchOptions = {}): SearchResult<T>[] {
+  async search(
+    query: T,
+    options: SearchOptions = {},
+  ): Promise<SearchResult<T>[]> {
     const k = options.k ?? Infinity;
     const maxDistance = options.maxDistance ?? Infinity;
     const sort = options.sort ?? true;
@@ -88,7 +102,7 @@ export class VPTree<T> {
     }
 
     let results: SearchResult<T>[] = [];
-    this.searchTree(this.root, query, maxDistance, results);
+    await this.searchTree(this.root, query, maxDistance, results);
 
     if (sort) {
       results.sort((a, b) => a.distance - b.distance);
@@ -101,15 +115,15 @@ export class VPTree<T> {
     return results;
   }
 
-  private searchTree(
+  private async searchTree(
     node: VPNode<T> | null,
     query: T,
     maxDistance: number,
     results: SearchResult<T>[],
-  ): void {
+  ): Promise<void> {
     if (node === null) return;
 
-    const dist = this.distance(query, node.point);
+    const dist = await this.distance(query, node.point);
 
     if (dist <= maxDistance) {
       results.push({ point: node.point, distance: dist });
@@ -119,11 +133,22 @@ export class VPTree<T> {
     const distUpperBound = dist + maxDistance;
 
     if (distLowerBound <= node.threshold) {
-      this.searchTree(node.left, query, maxDistance, results);
+      await this.searchTree(node.left, query, maxDistance, results);
     }
 
     if (distUpperBound >= node.threshold) {
-      this.searchTree(node.right, query, maxDistance, results);
+      await this.searchTree(node.right, query, maxDistance, results);
     }
+  }
+
+  getRoot(): VPNode<T> | null {
+    return this.root;
+  }
+
+  static fromRoot<T>(
+    root: VPNode<T> | null,
+    distance: (a: T, b: T) => Promise<number>,
+  ): VPTree<T> {
+    return new VPTree(root, distance);
   }
 }

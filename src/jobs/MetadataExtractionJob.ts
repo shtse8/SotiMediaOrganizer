@@ -7,11 +7,8 @@ import { Injectable, ProviderScope } from "@tsed/di";
   scope: ProviderScope.SINGLETON,
 })
 export class MetadataExtractionJob extends FileHashBaseJob<null, Metadata> {
-  private exifTool: ExifTool;
-
-  constructor() {
+  constructor(private exifTool: ExifTool) {
     super("metadataExtraction", null);
-    this.exifTool = new ExifTool();
   }
 
   protected async processFile(filePath: string): Promise<Metadata> {

@@ -5,16 +5,10 @@ import {
   type ProgramOptions,
   type DeduplicationResult,
   type GatherFileInfoResult,
-  AdaptiveExtractionConfig,
-  FeatureExtractionConfig,
-  SimilarityConfig,
-  FileStatsConfig,
 } from "./src/types";
 import { MediaOrganizer } from "./MediaOrganizer";
 import os from "os";
-import { ExifTool } from "exiftool-vendored";
 import { Context } from "./src/contexts/Context";
-import { ProviderScope } from "@tsed/di";
 
 function exitHandler() {
   console.log(chalk.red("\nSotiMediaOrganizer was interrupted"));
@@ -173,54 +167,9 @@ async function main() {
   const [source, destination] = program.args as [string, string];
   const options = program.opts<ProgramOptions>();
 
-  const injector = Context.InjectorService;
+  await Context.ensureInitialized(options);
 
-  injector.add(FileStatsConfig, {
-    scope: ProviderScope.SINGLETON,
-    useValue: <FileStatsConfig>{
-      maxChunkSize: options.maxChunkSize,
-    },
-  });
-
-  injector.add(AdaptiveExtractionConfig, {
-    scope: ProviderScope.SINGLETON,
-    useValue: <AdaptiveExtractionConfig>{
-      resolution: options.resolution,
-      sceneChangeThreshold: options.sceneChangeThreshold,
-      shortVideoThreshold: options.shortVideoThreshold,
-      minFrames: options.minFrames,
-      maxSceneFrames: options.maxSceneFrames,
-      targetFps: options.targetFps,
-    },
-  });
-
-  injector.add(FeatureExtractionConfig, {
-    scope: ProviderScope.SINGLETON,
-    useValue: <FeatureExtractionConfig>{
-      colorHistogramBins: 16,
-      edgeDetectionThreshold: 50,
-    },
-  });
-
-  injector.add(SimilarityConfig, {
-    scope: ProviderScope.SINGLETON,
-    useValue: <SimilarityConfig>{
-      windowSize: options.windowSize,
-      stepSize: options.stepSize,
-      imageSimilarityThreshold: options.imageSimilarityThreshold,
-      imageVideoSimilarityThreshold: options.imageVideoSimilarityThreshold,
-      videoSimilarityThreshold: options.videoSimilarityThreshold,
-    },
-  });
-
-  injector.add(ExifTool, {
-    scope: ProviderScope.SINGLETON,
-    useFactory: () => new ExifTool(),
-  });
-
-  await injector.load();
-
-  const organizer = injector.get<MediaOrganizer>(MediaOrganizer)!;
+  const organizer = Context.injector.get<MediaOrganizer>(MediaOrganizer)!;
   try {
     // Stage 1: File Discovery
     console.log(chalk.blue("Stage 1: Discovering files..."));
@@ -263,8 +212,6 @@ async function main() {
     );
   } catch (error) {
     console.error(chalk.red("An unexpected error occurred:"), error);
-  } finally {
-    await organizer.cleanUp();
   }
 }
 

@@ -4,6 +4,7 @@ import { Injectable, ProviderScope } from "@tsed/di";
 import { createHash, Hash } from "crypto";
 import { createReadStream } from "fs";
 import { BaseFileInfoJob } from "./BaseFileInfoJob";
+import { bufferToSharedArrayBuffer } from "../utils";
 
 @Injectable({
   scope: ProviderScope.SINGLETON,
@@ -27,7 +28,7 @@ export class FileStatsJob extends BaseFileInfoJob<FileStatsConfig, FileStats> {
   protected async hashFile(
     filePath: string,
     fileSize: number,
-  ): Promise<Buffer> {
+  ): Promise<SharedArrayBuffer> {
     const hash = createHash("md5");
 
     if (fileSize > this.config.maxChunkSize) {
@@ -38,7 +39,7 @@ export class FileStatsJob extends BaseFileInfoJob<FileStatsConfig, FileStats> {
       await this.hashFilePart(filePath, hash);
     }
 
-    return hash.digest();
+    return bufferToSharedArrayBuffer(hash.digest());
   }
 
   private hashFilePart(

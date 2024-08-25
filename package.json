@@ -25,6 +25,7 @@
   "author": "shtse8",
   "license": "MIT",
   "dependencies": {
+    "@msgpack/msgpack": "^3.0.0-beta2",
     "@tsed/di": "^7.79.4",
     "@types/fluent-ffmpeg": "^2.1.25",
     "deep-eql": "^5.0.2",

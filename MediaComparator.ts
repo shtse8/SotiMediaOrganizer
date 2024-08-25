@@ -5,9 +5,14 @@ import {
   FileInfo,
   FrameInfo,
   SimilarityConfig,
+  ProgramOptions,
+  FileProcessor,
 } from "./src/types";
-import { VPTree } from "./VPTree";
-import { hammingDistanceSIMD } from "./build";
+import { cpus } from "os";
+import { MediaProcessor } from "./src/MediaProcessor";
+import { VPNode, VPTree } from "./VPTree";
+import { filterAsync, mapAsync } from "./src/utils";
+import { WorkerPool } from "./src/WorkerPool";
 
 @Injectable({
   scope: ProviderScope.SINGLETON,
@@ -15,74 +20,217 @@ import { hammingDistanceSIMD } from "./build";
 export class MediaComparator {
   private readonly minThreshold: number;
 
-  constructor(private readonly similarityConfig: SimilarityConfig) {
+  constructor(
+    private mediaProcessor: MediaProcessor,
+    private similarityConfig: SimilarityConfig,
+    private options: ProgramOptions,
+  ) {
     this.minThreshold = Math.min(
       this.similarityConfig.imageSimilarityThreshold,
       this.similarityConfig.imageVideoSimilarityThreshold,
       this.similarityConfig.videoSimilarityThreshold,
     );
   }
+  private hammingDistance(
+    hash1: SharedArrayBuffer,
+    hash2: SharedArrayBuffer,
+  ): number {
+    const view1 = new Uint32Array(hash1);
+    const view2 = new Uint32Array(hash2);
+    let distance = 0;
 
-  private hammingDistance(hash1: Buffer, hash2: Buffer): number {
-    return hammingDistanceSIMD(hash1, hash2);
+    // Process 32-bit chunks
+    for (let i = 0; i < view1.length; i++) {
+      distance += this.popcount32(view1[i] ^ view2[i]);
+    }
 
-    // let distance = 0;
-    // const length = Math.min(hash1.length, hash2.length);
+    // Handle remaining bits
+    const remainingBytes = new Uint8Array(hash1, view1.length * 4);
+    const remainingBytes2 = new Uint8Array(hash2, view2.length * 4);
+    for (let i = 0; i < remainingBytes.length; i++) {
+      distance += this.popcount32(remainingBytes[i] ^ remainingBytes2[i]);
+    }
 
-    // // Process 4 bytes at a time
-    // for (let i = 0; i < length - 3; i += 4) {
-    //   const xor = (hash1.readUInt32LE(i) ^ hash2.readUInt32LE(i)) >>> 0;
-    //   distance += this.popcount32(xor);
-    // }
-
-    // // Handle remaining bytes
-    // for (let i = length - (length % 4); i < length; i++) {
-    //   distance += this.popcount8(hash1[i] ^ hash2[i]);
-    // }
-
-    // return distance;
+    return distance;
   }
 
   private popcount32(x: number): number {
-    x -= (x >> 1) & 0x55555555;
-    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
-    x = (x + (x >> 4)) & 0x0f0f0f0f;
-    x += x >> 8;
-    x += x >> 16;
+    x = x - ((x >>> 1) & 0x55555555);
+    x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+    x = (x + (x >>> 4)) & 0x0f0f0f0f;
+    x += x >>> 8;
+    x += x >>> 16;
     return x & 0x3f;
   }
 
-  private popcount8(x: number): number {
-    x -= (x >> 1) & 0x55;
-    x = (x & 0x33) + ((x >> 2) & 0x33);
-    x = (x + (x >> 4)) & 0x0f;
-    return x;
+  async deduplicateFiles(
+    files: string[],
+    selector: FileProcessor,
+    progressCallback?: (progress: string) => void,
+  ): Promise<DeduplicationResult> {
+    progressCallback?.("Building VPTree");
+    const vpTree = await VPTree.build(files, async (a, b) => {
+      const [fileInfoA, fileInfoB] = await Promise.all([
+        selector(a),
+        selector(b),
+      ]);
+      return 1 - this.calculateSimilarity(fileInfoA.media, fileInfoB.media);
+    });
+
+    progressCallback?.("Running DBSCAN");
+    const clusters = await this.parallelDBSCAN(files, vpTree, progressCallback);
+
+    return this.processResults(clusters, selector);
   }
 
-  deduplicateFiles<T>(
-    files: T[],
-    selector: (node: T) => FileInfo,
-  ): DeduplicationResult<T> {
-    console.time("VPTree Construction");
-    const vpTree = new VPTree<T>(
-      files,
-      (a, b) =>
-        1 - this.calculateSimilarity(selector(a).media, selector(b).media),
+  private async parallelDBSCAN(
+    files: string[],
+    vpTree: VPTree<string>,
+    progressCallback?: (progress: string) => void,
+  ): Promise<Set<string>[]> {
+    const batchSize = 500;
+    const numWorkers = Math.max(files.length / batchSize, cpus().length - 1);
+
+    const workerPool = new WorkerPool(
+      "./src/deduplicationWorker.js",
+      numWorkers,
+      {
+        options: this.options,
+        root: vpTree.getRoot(),
+        fileInfoCache: this.mediaProcessor.exportCache(),
+      },
     );
-    console.timeEnd("VPTree Construction");
 
-    console.time("Clustering");
-    const { clusters, stats } = this.dbscan(files, vpTree, selector);
-    console.timeEnd("Clustering");
+    workerPool.on("progress", ({ processed, total }) => {
+      progressCallback?.("Processed " + processed + " of " + total + " files");
+    });
 
-    console.log("DBSCAN Stats:", stats);
+    const results = await workerPool.processInBatches<string, Set<string>[]>(
+      files,
+      batchSize,
+      "dbscan",
+    );
 
-    console.time("Processing Results");
-    const uniqueFiles = new Set<T>();
+    workerPool.terminate();
+
+    return this.mergeAndDeduplicate(results.flat());
+  }
+  private mergeAndDeduplicate(clusters: Set<string>[]): Set<string>[] {
+    const merged: Set<string>[] = [];
+    const elementToClusterMap = new Map<string, Set<string>>();
+
+    for (const cluster of clusters) {
+      const relatedClusters = new Set<Set<string>>();
+      for (const element of cluster) {
+        const existingCluster = elementToClusterMap.get(element);
+        if (existingCluster) {
+          relatedClusters.add(existingCluster);
+        }
+      }
+
+      if (relatedClusters.size === 0) {
+        merged.push(cluster);
+        for (const element of cluster) {
+          elementToClusterMap.set(element, cluster);
+        }
+      } else {
+        const mergedCluster = new Set<string>(cluster);
+        for (const relatedCluster of relatedClusters) {
+          for (const element of relatedCluster) {
+            mergedCluster.add(element);
+          }
+          merged.splice(merged.indexOf(relatedCluster), 1);
+        }
+        merged.push(mergedCluster);
+        for (const element of mergedCluster) {
+          elementToClusterMap.set(element, mergedCluster);
+        }
+      }
+    }
+
+    return merged;
+  }
+
+  async workerDBSCAN(
+    chunk: string[],
+    vpTree: VPTree<string>,
+  ): Promise<Set<string>[]> {
+    const eps = 1 - this.minThreshold;
+    const minPts = 2;
+    const clusters: Set<string>[] = [];
+    const visited = new Set<string>();
+
+    for (const point of chunk) {
+      if (visited.has(point)) continue;
+      visited.add(point);
+
+      const neighbors = await this.getValidNeighbors(point, vpTree, eps);
+
+      if (neighbors.length < minPts) {
+        clusters.push(new Set([point]));
+        continue;
+      }
+
+      const cluster = new Set<string>([point]);
+      const stack = [...neighbors];
+
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (visited.has(current)) continue;
+        visited.add(current);
+
+        cluster.add(current);
+
+        const currentNeighbors = await this.getValidNeighbors(
+          current,
+          vpTree,
+          eps,
+        );
+
+        if (currentNeighbors.length >= minPts) {
+          for (const neighbor of currentNeighbors) {
+            if (!visited.has(neighbor)) {
+              stack.push(neighbor);
+            }
+          }
+        }
+      }
+
+      clusters.push(cluster);
+    }
+
+    return clusters;
+  }
+
+  private async getValidNeighbors(
+    point: string,
+    vpTree: VPTree<string>,
+    eps: number,
+  ): Promise<string[]> {
+    const neighbors = await vpTree.search(point, {
+      maxDistance: eps,
+      sort: false,
+    });
+    const media1 = (await this.mediaProcessor.processFile(point)).media;
+    const result = await filterAsync(neighbors, async (neighbor) => {
+      const similarity = 1 - neighbor.distance;
+      const media2 = (await this.mediaProcessor.processFile(neighbor.point))
+        .media;
+      const threshold = this.getAdaptiveThreshold(media1, media2);
+      return similarity >= threshold;
+    });
+    return result.map((n) => n.point);
+  }
+
+  private async processResults(
+    clusters: Set<string>[],
+    selector: FileProcessor,
+  ): Promise<DeduplicationResult> {
+    const uniqueFiles = new Set<string>();
     const duplicateSets: Array<{
-      bestFile: T;
-      representatives: Set<T>;
-      duplicates: Set<T>;
+      bestFile: string;
+      representatives: Set<string>;
+      duplicates: Set<string>;
     }> = [];
 
     for (const cluster of clusters) {
@@ -90,7 +238,7 @@ export class MediaComparator {
         uniqueFiles.add(cluster.values().next().value);
       } else {
         const clusterArray = Array.from(cluster);
-        const representatives = this.selectRepresentatives(
+        const representatives = await this.selectRepresentatives(
           clusterArray,
           selector,
         );
@@ -106,125 +254,29 @@ export class MediaComparator {
         });
       }
     }
-    console.timeEnd("Processing Results");
-
-    console.log("\n\n");
 
     return { uniqueFiles, duplicateSets };
   }
 
-  private dbscan<T>(
-    files: T[],
-    vpTree: VPTree<T>,
-    selector: (node: T) => FileInfo,
-  ): {
-    clusters: Set<T>[];
-    stats: {
-      totalFiles: number;
-      totalSearches: number;
-      totalValidNeighbors: number;
-      largestClusterSize: number;
-      totalClusterExpansions: number;
-      averageValidNeighbors: number;
-    };
-  } {
-    const eps = 1 - this.minThreshold;
-    const minPts = 2;
-    const visited = new Set<T>();
-    const clusters: Set<T>[] = [];
-    const stats = {
-      totalFiles: files.length,
-      totalSearches: 0,
-      totalValidNeighbors: 0,
-      largestClusterSize: 0,
-      totalClusterExpansions: 0,
-      averageValidNeighbors: 0,
-    };
-
-    for (const file of files) {
-      if (visited.has(file)) continue;
-
-      visited.add(file);
-      const neighbors = this.getValidNeighbors(file, vpTree, selector, eps);
-      stats.totalSearches++;
-      stats.totalValidNeighbors += neighbors.length;
-
-      if (neighbors.length < minPts) {
-        clusters.push(new Set([file]));
-        continue;
-      }
-
-      const cluster = new Set<T>([file]);
-      const stack = [...neighbors];
-
-      while (stack.length > 0) {
-        const current = stack.pop()!;
-        if (visited.has(current)) continue;
-
-        visited.add(current);
-        cluster.add(current);
-
-        const currentNeighbors = this.getValidNeighbors(
-          current,
-          vpTree,
-          selector,
-          eps,
-        );
-        stats.totalSearches++;
-        stats.totalValidNeighbors += currentNeighbors.length;
-        stats.totalClusterExpansions++;
-
-        if (currentNeighbors.length >= minPts) {
-          for (const neighbor of currentNeighbors) {
-            if (!visited.has(neighbor)) {
-              stack.push(neighbor);
-            }
-          }
-        }
-      }
-
-      clusters.push(cluster);
-      stats.largestClusterSize = Math.max(
-        stats.largestClusterSize,
-        cluster.size,
-      );
-    }
-
-    stats.averageValidNeighbors =
-      stats.totalValidNeighbors / stats.totalSearches;
-
-    return { clusters, stats };
+  createVPTreeByRoot(root: VPNode<string>): VPTree<string> {
+    return new VPTree<string>(root, async (a, b) => {
+      const [fileInfoA, fileInfoB] = await Promise.all([
+        this.mediaProcessor.processFile(a),
+        this.mediaProcessor.processFile(b),
+      ]);
+      return 1 - this.calculateSimilarity(fileInfoA.media, fileInfoB.media);
+    });
   }
 
-  private getValidNeighbors<T>(
-    file: T,
-    vpTree: VPTree<T>,
-    selector: (node: T) => FileInfo,
-    eps: number,
-  ): T[] {
-    const neighbors = vpTree.search(file, { maxDistance: eps, sort: false });
-    return neighbors
-      .filter((neighbor) => {
-        const similarity = 1 - neighbor.distance;
-        const threshold = this.getAdaptiveThreshold(
-          selector(file).media,
-          selector(neighbor.point).media,
-        );
-        return similarity >= threshold;
-      })
-      .map((n) => n.point);
-  }
+  private async selectRepresentatives(
+    cluster: string[],
+    selector: FileProcessor,
+  ): Promise<string[]> {
+    if (cluster.length <= 1) return cluster;
 
-  private selectRepresentatives<T>(
-    cluster: T[],
-    selector: (node: T) => FileInfo,
-  ): T[] {
-    if (cluster.length === 0) return [];
-    if (cluster.length === 1) return cluster;
-
-    const sortedEntries = this.scoreEntries(cluster, selector);
+    const sortedEntries = await this.scoreEntries(cluster, selector);
     const bestEntry = sortedEntries[0];
-    const bestFileInfo = selector(bestEntry);
+    const bestFileInfo = await selector(bestEntry);
 
     if (bestFileInfo.media.duration === 0) {
       return [bestEntry];
@@ -237,25 +289,28 @@ export class MediaComparator {
     return fileInfo.metadata.width * fileInfo.metadata.height;
   }
 
-  private handleMultiFrameBest<T>(
-    sortedEntries: T[],
-    selector: (node: T) => FileInfo,
-  ): T[] {
+  private async handleMultiFrameBest(
+    sortedEntries: string[],
+    selector: FileProcessor,
+  ): Promise<string[]> {
     const bestEntry = sortedEntries[0];
-    const bestFileInfo = selector(bestEntry);
-    const representatives: T[] = [bestEntry];
+    const bestFileInfo = await selector(bestEntry);
+    const representatives: string[] = [bestEntry];
 
-    const potentialCaptures = sortedEntries.filter((entry) => {
-      const fileInfo = selector(entry);
-      return (
-        fileInfo.media.duration === 0 &&
-        this.getQuality(fileInfo) >= this.getQuality(bestFileInfo) &&
-        (!bestFileInfo.metadata.imageDate || !!fileInfo.metadata.imageDate)
-      );
-    });
+    const potentialCaptures = await filterAsync(
+      sortedEntries,
+      async (entry) => {
+        const fileInfo = await selector(entry);
+        return (
+          fileInfo.media.duration === 0 &&
+          this.getQuality(fileInfo) >= this.getQuality(bestFileInfo) &&
+          (!bestFileInfo.metadata.imageDate || !!fileInfo.metadata.imageDate)
+        );
+      },
+    );
 
     if (potentialCaptures.length > 0) {
-      const { uniqueFiles } = this.deduplicateFiles(
+      const { uniqueFiles } = await this.deduplicateFiles(
         potentialCaptures,
         selector,
       );
@@ -265,17 +320,21 @@ export class MediaComparator {
     return representatives;
   }
 
-  private scoreEntries<T>(entries: T[], selector: (node: T) => FileInfo): T[] {
-    return entries
-      .map((entry) => ({
+  private async scoreEntries(
+    entries: string[],
+    selector: FileProcessor,
+  ): Promise<string[]> {
+    return (
+      await mapAsync(entries, async (entry) => ({
         entry,
-        score: this.calculateEntryScore(selector(entry)),
+        score: this.calculateEntryScore(await selector(entry)),
       }))
+    )
       .sort((a, b) => b.score - a.score)
       .map((scored) => scored.entry);
   }
 
-  public calculateEntryScore(fileInfo: FileInfo): number {
+  calculateEntryScore(fileInfo: FileInfo): number {
     let score = 0;
 
     if (fileInfo.media.duration > 0) {
@@ -298,7 +357,7 @@ export class MediaComparator {
     return score;
   }
 
-  private calculateSimilarity(media1: MediaInfo, media2: MediaInfo): number {
+  calculateSimilarity(media1: MediaInfo, media2: MediaInfo): number {
     const isImage1 = media1.duration === 0;
     const isImage2 = media2.duration === 0;
 
@@ -319,9 +378,10 @@ export class MediaComparator {
     frame2: FrameInfo,
   ): number {
     const distance = this.hammingDistance(frame1.hash, frame2.hash);
-    const maxDistance = frame1.hash.length * 8;
+    const maxDistance = frame1.hash.byteLength * 8;
     return 1 - distance / maxDistance;
   }
+
   private calculateImageVideoSimilarity(
     image: MediaInfo,
     video: MediaInfo,

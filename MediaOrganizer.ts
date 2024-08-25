@@ -1,11 +1,9 @@
-import { ExifDate, ExifDateTime } from "exiftool-vendored";
 import {
   type FileInfo,
   type DeduplicationResult,
   type Stats,
   type GatherFileInfoResult,
   type ProcessingConfig,
-  FileType,
   type DuplicateSet,
 } from "./src/types";
 import {
@@ -23,13 +21,13 @@ import chalk from "chalk";
 import { MultiBar, Presets } from "cli-progress";
 import { Semaphore } from "async-mutex";
 import cliProgress from "cli-progress";
-import { createHash, type Hash } from "crypto";
-import { createReadStream } from "fs";
+import { createHash } from "crypto";
 import path from "path";
 import { Spinner } from "@topcli/spinner";
 import { MediaComparator } from "./MediaComparator";
-import { MediaProcessor } from "./MediaProcessor";
+import { MediaProcessor } from "./src/MediaProcessor";
 import { Injectable, ProviderScope } from "@tsed/di";
+import { ALL_SUPPORTED_EXTENSIONS, getFileTypeByExt } from "./src/utils";
 
 @Injectable({
   scope: ProviderScope.SINGLETON,
@@ -38,7 +36,9 @@ export class MediaOrganizer {
   constructor(
     private processor: MediaProcessor,
     private comparator: MediaComparator,
-  ) {}
+  ) {
+    console.log("MediaOrganizer created", !!processor, !!comparator);
+  }
 
   private getConfigHash(config: ProcessingConfig): string {
     return createHash("md5").update(JSON.stringify(config)).digest("hex");
@@ -64,7 +64,7 @@ export class MediaOrganizer {
           if (entry.isDirectory()) {
             semaphore.runExclusive(() => scanDirectory(entryPath));
           } else if (
-            MediaProcessor.ALL_SUPPORTED_EXTENSIONS.has(
+            ALL_SUPPORTED_EXTENSIONS.has(
               path.extname(entry.name).slice(1).toLowerCase(),
             )
           ) {
@@ -198,7 +198,7 @@ export class MediaOrganizer {
     const filesByFormat = new Map<string, string[]>();
     for (const file of files) {
       const ext = path.extname(file).slice(1).toLowerCase();
-      if (MediaProcessor.ALL_SUPPORTED_EXTENSIONS.has(ext)) {
+      if (ALL_SUPPORTED_EXTENSIONS.has(ext)) {
         filesByFormat.set(ext, filesByFormat.get(ext) ?? []);
         filesByFormat.get(ext)!.push(file);
       }
@@ -206,8 +206,7 @@ export class MediaOrganizer {
 
     const sortedFormats = Array.from(filesByFormat.keys()).sort(
       (a, b) =>
-        MediaOrganizer.getFileTypeByExt(a) -
-          MediaOrganizer.getFileTypeByExt(b) ||
+        getFileTypeByExt(a) - getFileTypeByExt(b) ||
         filesByFormat.get(b)!.length - filesByFormat.get(a)!.length,
     );
 
@@ -252,6 +251,7 @@ export class MediaOrganizer {
             if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
             validFiles.push(file);
           } catch {
+            // console.error(chalk.red(`Error processing file ${file}:`, e, e.stack));
             stats.errorCount++;
             errorFiles.push(file);
           } finally {
@@ -267,33 +267,15 @@ export class MediaOrganizer {
     return { validFiles, errorFiles };
   }
 
-  private isConfigMatch(
-    config1: ProcessingConfig,
-    config2: ProcessingConfig,
-  ): boolean {
-    return (
-      config1.resolution === config2.resolution &&
-      config1.framesPerSecond === config2.framesPerSecond &&
-      config1.maxFrames === config2.maxFrames
-    );
-  }
-
   async deduplicateFiles(files: string[]): Promise<DeduplicationResult> {
     const spinner = new Spinner().start("Deduplicating files...");
 
-    const fileInfoMap = new Map<string, FileInfo>();
-    for (const file of files) {
-      const fileInfo = await this.processor.processFile(file);
-      if (!fileInfo) {
-        throw new Error(`File info not found for file ${file}`);
-      }
-      fileInfoMap.set(file, fileInfo);
-    }
-
-    const { uniqueFiles, duplicateSets } = this.comparator.deduplicateFiles(
-      files,
-      (file) => fileInfoMap.get(file)!,
-    );
+    const { uniqueFiles, duplicateSets } =
+      await this.comparator.deduplicateFiles(
+        files,
+        (file) => this.processor.processFile(file),
+        (progress) => (spinner.text = `Deduplicating files... ${progress}`),
+      );
 
     const duplicateCount = duplicateSets.reduce(
       (sum, set) => sum + set.duplicates.size,
@@ -302,91 +284,6 @@ export class MediaOrganizer {
     spinner.succeed(
       `Deduplication completed in ${(spinner.elapsedTime / 1000).toFixed(2)} seconds: Found ${duplicateSets.length} duplicate sets, ${uniqueFiles.size} unique files, ${duplicateCount} duplicates`,
     );
-
-    // print top 5 duplicate sets
-    const featuredDuplicates = duplicateSets
-      .sort(
-        (a, b) =>
-          b.duplicates.size +
-          b.representatives.size -
-          a.duplicates.size -
-          a.representatives.size,
-      )
-      .slice(0, 5);
-
-    console.log(chalk.blue("\nTop 5 Duplicate Sets:"));
-    if (featuredDuplicates.length === 0) {
-      console.log(chalk.white("No duplicate sets found"));
-    }
-    for (let i = 0; i < featuredDuplicates.length; i++) {
-      const duplicateSet = featuredDuplicates[i];
-      const bestFileInfo = fileInfoMap.get(duplicateSet.bestFile)!;
-      console.log(
-        chalk.white(
-          `Duplicate Set ${i + 1}: ${duplicateSet.bestFile}, frames: ${bestFileInfo.media.frames.length}`,
-        ),
-      );
-      console.log(
-        chalk.white(`  ${duplicateSet.representatives.size} representatives`),
-      );
-      console.log(chalk.white(`  ${duplicateSet.duplicates.size} duplicates`));
-    }
-
-    // print mixed format duplicate sets
-    const mixedFormatDuplicates = duplicateSets
-      .filter((set) => {
-        const files = Array.from(set.representatives).concat(
-          Array.from(set.duplicates),
-        );
-        const formats = new Set(
-          files.map((file) => MediaOrganizer.getFileType(file)),
-        );
-        return formats.size > 1;
-      })
-      .sort(
-        (a, b) =>
-          b.duplicates.size +
-          b.representatives.size -
-          a.duplicates.size -
-          a.representatives.size,
-      )
-      .slice(0, 5);
-
-    console.log(chalk.blue("\nTop 5 Mixed Format Duplicate Sets:"));
-    if (mixedFormatDuplicates.length === 0) {
-      console.log(chalk.white("No mixed format duplicate sets found"));
-    }
-    for (let i = 0; i < mixedFormatDuplicates.length; i++) {
-      const duplicateSet = mixedFormatDuplicates[i];
-      console.log(
-        chalk.white(`Duplicate Set ${i + 1}: ${duplicateSet.bestFile}`),
-      );
-      console.log(
-        chalk.white(`  ${duplicateSet.representatives.size} representatives`),
-      );
-      console.log(chalk.white(`  ${duplicateSet.duplicates.size} duplicates`));
-    }
-
-    // print multiple representative duplicate sets
-    const multipleRepresentatives = duplicateSets.filter(
-      (set) => set.representatives.size > 1,
-    );
-    console.log(chalk.blue("\nDuplicate Sets with Multiple Representatives:"));
-    if (multipleRepresentatives.length === 0) {
-      console.log(
-        chalk.white("No duplicate sets with multiple representatives found"),
-      );
-    }
-    for (let i = 0; i < multipleRepresentatives.length; i++) {
-      const duplicateSet = multipleRepresentatives[i];
-      console.log(
-        chalk.white(`Duplicate Set ${i + 1}: ${duplicateSet.bestFile}`),
-      );
-      console.log(
-        chalk.white(`  ${duplicateSet.representatives.size} representatives`),
-      );
-      console.log(chalk.white(`  ${duplicateSet.duplicates.size} duplicates`));
-    }
 
     return { uniqueFiles, duplicateSets };
   }
@@ -765,20 +662,6 @@ export class MediaOrganizer {
     console.log(chalk.green("\nFile transfer completed"));
   }
 
-  static getFileType(filePath: string): FileType {
-    const ext = extname(filePath).slice(1).toLowerCase();
-    return MediaOrganizer.getFileTypeByExt(ext);
-  }
-
-  static getFileTypeByExt(ext: string): FileType {
-    for (const fileType of [FileType.Image, FileType.Video]) {
-      if (MediaProcessor.SUPPORTED_EXTENSIONS[fileType].has(ext)) {
-        return fileType;
-      }
-    }
-    throw new Error(`Unsupported file type for file ${ext}`);
-  }
-
   private async transferOrCopyFile(
     sourcePath: string,
     targetPath: string,
@@ -990,76 +873,5 @@ export class MediaOrganizer {
     d.setUTCDate(d.getUTCDate() + 4 - dayNum);
     const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
     return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
-  }
-
-  private hashFile(
-    filePath: string,
-    hash: Hash,
-    start: number = 0,
-    size?: number,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const stream = createReadStream(filePath, {
-        start,
-        end: size ? start + size - 1 : undefined,
-      });
-      stream.on("data", (chunk: Buffer) => hash.update(chunk));
-      stream.on("end", resolve);
-      stream.on("error", reject);
-    });
-  }
-
-  private async combineFrameHashes(
-    frameBuffers: Buffer[],
-    resolution: number,
-    numFrames: number,
-  ): Promise<Buffer> {
-    const combinedHash = Buffer.alloc(resolution * resolution * numFrames);
-
-    // Combine perceptual hashes from each frame
-    for (let i = 0; i < frameBuffers.length; i++) {
-      const frameHash = this.getPerceptualHash(frameBuffers[i], resolution);
-      frameHash.copy(combinedHash, i * frameHash.length);
-    }
-
-    return combinedHash;
-  }
-
-  private getPerceptualHash(imageBuffer: Buffer, resolution: number): Buffer {
-    const pixelCount = resolution * resolution;
-    const pixels = new Uint8Array(pixelCount);
-    const hash = Buffer.alloc(Math.ceil(pixelCount / 8));
-
-    // Convert to grayscale and resize
-    for (let i = 0; i < pixelCount; i++) {
-      pixels[i] = imageBuffer[i];
-    }
-
-    // Calculate average
-    const average = pixels.reduce((sum, pixel) => sum + pixel, 0) / pixelCount;
-
-    // Calculate hash
-    for (let i = 0; i < pixelCount; i++) {
-      if (pixels[i] > average) {
-        hash[Math.floor(i / 8)] |= 1 << i % 8;
-      }
-    }
-
-    return hash;
-  }
-
-  private toDate(
-    value: string | ExifDateTime | ExifDate | undefined,
-  ): Date | undefined {
-    if (!value) return undefined;
-    if (typeof value === "string") return new Date(value);
-    if (value instanceof ExifDateTime || value instanceof ExifDate) {
-      return value.toDate();
-    }
-    return undefined;
-  }
-
-  async cleanUp(): Promise<void> {
-    await this.processor.cleanUp();
   }
 }
