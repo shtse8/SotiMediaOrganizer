@@ -19,8 +19,8 @@
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
     "lint": "eslint .",
-    "asbuild": "asc assembly/index.ts --enable simd --target debug --outFile build/index.wasm",
-    "asbuild:release": "asc assembly/index.ts --enable simd --target release --outFile build/index.wasm"
+    "asbuild": "asc assembly/index.ts --target debug --outFile build/index.wasm",
+    "asbuild:release": "asc assembly/index.ts --target release --outFile build/index.wasm"
   },
   "author": "shtse8",
   "license": "MIT",

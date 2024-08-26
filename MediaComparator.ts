@@ -13,6 +13,7 @@ import { MediaProcessor } from "./src/MediaProcessor";
 import { VPNode, VPTree } from "./VPTree";
 import { filterAsync, mapAsync } from "./src/utils";
 import { WorkerPool } from "./src/WorkerPool";
+import { hammingDistanceSIMD } from "./build";
 
 @Injectable({
   scope: ProviderScope.SINGLETON,
@@ -35,23 +36,7 @@ export class MediaComparator {
     hash1: SharedArrayBuffer,
     hash2: SharedArrayBuffer,
   ): number {
-    const view1 = new Uint32Array(hash1);
-    const view2 = new Uint32Array(hash2);
-    let distance = 0;
-
-    // Process 32-bit chunks
-    for (let i = 0; i < view1.length; i++) {
-      distance += this.popcount32(view1[i] ^ view2[i]);
-    }
-
-    // Handle remaining bits
-    const remainingBytes = new Uint8Array(hash1, view1.length * 4);
-    const remainingBytes2 = new Uint8Array(hash2, view2.length * 4);
-    for (let i = 0; i < remainingBytes.length; i++) {
-      distance += this.popcount32(remainingBytes[i] ^ remainingBytes2[i]);
-    }
-
-    return distance;
+    return hammingDistanceSIMD(new Uint8Array(hash1), new Uint8Array(hash2));
   }
 
   private popcount32(x: number): number {
