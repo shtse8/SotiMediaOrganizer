@@ -39,9 +39,9 @@ async function main() {
     )
     .option(
       "-c, --concurrency <number>",
-      "Number of workers to use (default: half of CPU cores)",
+      "Number of workers to use (default: CPU cores - 1)",
       parseInt,
-      Math.max(1, Math.floor(os.cpus().length / 2)),
+      Math.max(1, Math.floor(os.cpus().length - 1)),
     )
     .option("-m, --move", "Move files instead of copying them", false)
     .option(
