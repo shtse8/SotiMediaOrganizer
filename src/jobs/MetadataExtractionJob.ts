@@ -1,14 +1,14 @@
-import { FileHashBaseJob } from "./FileHashBaseJob";
 import { ExifDate, ExifDateTime, ExifTool } from "exiftool-vendored";
+import { FileHashBaseJob } from "./FileHashBaseJob";
 import { Metadata } from "../types";
-import { Injectable, ProviderScope } from "@tsed/di";
+import { injectable } from "inversify";
 
-@Injectable({
-  scope: ProviderScope.SINGLETON,
-})
-export class MetadataExtractionJob extends FileHashBaseJob<null, Metadata> {
+@injectable()
+export class MetadataExtractionJob extends FileHashBaseJob<Metadata> {
+  protected readonly jobName = "metadataExtraction";
+
   constructor(private exifTool: ExifTool) {
-    super("metadataExtraction", null);
+    super();
   }
 
   protected async processFile(filePath: string): Promise<Metadata> {

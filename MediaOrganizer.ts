@@ -3,7 +3,6 @@ import {
   type DeduplicationResult,
   type Stats,
   type GatherFileInfoResult,
-  type ProcessingConfig,
   type DuplicateSet,
 } from "./src/types";
 import {
@@ -21,27 +20,20 @@ import chalk from "chalk";
 import { MultiBar, Presets } from "cli-progress";
 import { Semaphore } from "async-mutex";
 import cliProgress from "cli-progress";
-import { createHash } from "crypto";
 import path from "path";
 import { Spinner } from "@topcli/spinner";
 import { MediaComparator } from "./MediaComparator";
 import { MediaProcessor } from "./src/MediaProcessor";
-import { Injectable, ProviderScope } from "@tsed/di";
 import { ALL_SUPPORTED_EXTENSIONS, getFileTypeByExt } from "./src/utils";
+import { injectable } from "inversify";
 
-@Injectable({
-  scope: ProviderScope.SINGLETON,
-})
+@injectable()
 export class MediaOrganizer {
   constructor(
     private processor: MediaProcessor,
     private comparator: MediaComparator,
   ) {
     console.log("MediaOrganizer created", !!processor, !!comparator);
-  }
-
-  private getConfigHash(config: ProcessingConfig): string {
-    return createHash("md5").update(JSON.stringify(config)).digest("hex");
   }
 
   async discoverFiles(
@@ -255,7 +247,8 @@ export class MediaOrganizer {
                 if (fileInfo.metadata.imageDate) stats.withImageDateCount++;
                 if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
                 validFiles.push(file);
-              } catch {
+              } catch (e) {
+                console.error(e);
                 stats.errorCount++;
                 errorFiles.push(file);
               } finally {

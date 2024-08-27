@@ -1,17 +1,17 @@
 import { stat } from "fs/promises";
 import { FileStats, FileStatsConfig } from "../types";
-import { Injectable, ProviderScope } from "@tsed/di";
 import { createHash, Hash } from "crypto";
 import { createReadStream } from "fs";
 import { BaseFileInfoJob } from "./BaseFileInfoJob";
 import { bufferToSharedArrayBuffer } from "../utils";
+import { injectable } from "inversify";
 
-@Injectable({
-  scope: ProviderScope.SINGLETON,
-})
-export class FileStatsJob extends BaseFileInfoJob<FileStatsConfig, FileStats> {
+@injectable()
+export class FileStatsJob extends BaseFileInfoJob<FileStats, FileStatsConfig> {
+  protected readonly jobName = "fileStats";
+
   constructor(config: FileStatsConfig) {
-    super("fileStats", config);
+    super(config);
   }
 
   protected async processFile(filePath: string): Promise<FileStats> {

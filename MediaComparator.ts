@@ -1,4 +1,3 @@
-import { Injectable, ProviderScope } from "@tsed/di";
 import {
   MediaInfo,
   DeduplicationResult,
@@ -14,10 +13,9 @@ import { VPNode, VPTree } from "./VPTree";
 import { filterAsync, mapAsync } from "./src/utils";
 import { WorkerPool } from "./src/WorkerPool";
 import { hammingDistanceSIMD } from "./build";
+import { injectable } from "inversify";
 
-@Injectable({
-  scope: ProviderScope.SINGLETON,
-})
+@injectable()
 export class MediaComparator {
   private readonly minThreshold: number;
 

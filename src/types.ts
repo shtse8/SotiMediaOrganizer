@@ -1,9 +1,8 @@
-import { Injectable } from "@tsed/di";
 import { VPNode } from "../VPTree";
 
 export enum FileType {
-  Video,
   Image,
+  Video,
 }
 
 export interface ProcessingConfig {
@@ -85,7 +84,6 @@ export class AdaptiveExtractionConfig {
   targetFps: number;
 }
 
-@Injectable()
 export class FeatureExtractionConfig {
   colorHistogramBins: number;
   edgeDetectionThreshold: number;

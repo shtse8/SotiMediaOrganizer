@@ -1,12 +1,10 @@
 import { FileInfo } from "./types";
-import { Injectable, ProviderScope } from "@tsed/di";
 import { AdaptiveExtractionJob } from "./jobs/AdaptiveExtractionJob";
 import { MetadataExtractionJob } from "./jobs/MetadataExtractionJob";
 import { FileStatsJob } from "./jobs/FileStatsJob";
+import { injectable } from "inversify";
 
-@Injectable({
-  scope: ProviderScope.SINGLETON,
-})
+@injectable()
 export class MediaProcessor {
   constructor(
     private adaptiveExtractionJob: AdaptiveExtractionJob,

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import "reflect-metadata";
+
 import { Command } from "commander";
 import chalk from "chalk";
 import {
@@ -169,7 +171,7 @@ async function main() {
 
   await Context.ensureInitialized(options);
 
-  const organizer = Context.injector.get<MediaOrganizer>(MediaOrganizer)!;
+  const organizer = await Context.injector.getAsync(MediaOrganizer)!;
   try {
     // Stage 1: File Discovery
     console.log(chalk.blue("Stage 1: Discovering files..."));

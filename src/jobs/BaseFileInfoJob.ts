@@ -1,25 +1,30 @@
 import { Mutex } from "async-mutex";
 import { DatabaseContext } from "../contexts/DatabaseContext";
-import { Context } from "../contexts/Context";
 import type { Database } from "lmdb";
 import eql from "deep-eql";
 import { hexToSharedArrayBuffer, sharedArrayBufferToHex } from "../utils";
 import { MemoryCache } from "./MemoryCache";
+import { inject, injectable, postConstruct } from "inversify";
 
-export abstract class BaseFileInfoJob<TConfig, TResult> {
+@injectable()
+export abstract class BaseFileInfoJob<TResult, TConfig = void> {
   private readonly locks = new MemoryCache(() => new Mutex());
 
   private db: Database;
   private configDb: Database;
 
-  constructor(
-    protected readonly dbName: string,
-    protected readonly config: TConfig,
-  ) {
-    const dbContext = Context.injector.get(DatabaseContext)!;
-    this.db = dbContext.rootDatabase.openDB({ name: this.dbName });
-    this.configDb = dbContext.rootDatabase.openDB({
-      name: `${this.dbName}_config`,
+  @inject(DatabaseContext)
+  private readonly dbContext: DatabaseContext;
+
+  protected abstract readonly jobName: string;
+
+  constructor(protected readonly config: TConfig) {}
+
+  @postConstruct()
+  private async init() {
+    this.db = this.dbContext.rootDatabase.openDB({ name: this.jobName });
+    this.configDb = this.dbContext.rootDatabase.openDB({
+      name: `${this.jobName}_config`,
     });
   }
 

@@ -1,9 +1,7 @@
-import { Injectable, ProviderScope } from "@tsed/di";
 import { type RootDatabase, open } from "lmdb";
+import { injectable } from "inversify";
 
-@Injectable({
-  scope: ProviderScope.SINGLETON,
-})
+@injectable()
 export class DatabaseContext {
   readonly rootDatabase: RootDatabase = open({
     path: ".mediadb",

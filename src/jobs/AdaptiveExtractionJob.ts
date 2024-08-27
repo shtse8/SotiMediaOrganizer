@@ -5,20 +5,20 @@ import {
   FrameInfo,
 } from "../types";
 import { FileHashBaseJob } from "./FileHashBaseJob";
-import { Injectable, ProviderScope } from "@tsed/di";
 import sharp from "sharp";
 import ffmpeg from "fluent-ffmpeg";
 import { getFileType } from "../utils";
+import { injectable } from "inversify";
 
-@Injectable({
-  scope: ProviderScope.SINGLETON,
-})
+@injectable()
 export class AdaptiveExtractionJob extends FileHashBaseJob<
-  AdaptiveExtractionConfig,
-  MediaInfo
+  MediaInfo,
+  AdaptiveExtractionConfig
 > {
+  protected readonly jobName = "adaptiveExtraction";
+
   constructor(config: AdaptiveExtractionConfig) {
-    super("adaptiveExtraction", config);
+    super(config);
   }
 
   protected async processFile(filePath: string): Promise<MediaInfo> {
@@ -205,15 +205,26 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 
   private computePerceptualHash(imageBuffer: Buffer): SharedArrayBuffer {
     const pixelCount = this.config.resolution * this.config.resolution;
-    const hash = new SharedArrayBuffer(Math.ceil(pixelCount / 8));
+    const hashSize = Math.ceil(pixelCount / 8);
+    const hash = new SharedArrayBuffer(hashSize);
     const hashView = new Uint8Array(hash);
-    const average =
-      imageBuffer.reduce((sum, pixel) => sum + pixel, 0) / pixelCount;
 
+    // Calculate average using a single pass
+    let sum = 0;
     for (let i = 0; i < pixelCount; i++) {
-      if (imageBuffer[i] > average) {
-        hashView[Math.floor(i / 8)] |= 1 << i % 8;
+      sum += imageBuffer[i];
+    }
+    const average = sum / pixelCount;
+
+    // Compute hash using bit manipulation
+    for (let i = 0; i < hashSize; i++) {
+      let byte = 0;
+      for (let j = 0; j < 8 && i * 8 + j < pixelCount; j++) {
+        if (imageBuffer[i * 8 + j] > average) {
+          byte |= 1 << j;
+        }
       }
+      hashView[i] = byte;
     }
 
     return hash;
