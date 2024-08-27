@@ -163,7 +163,7 @@ export class MediaOrganizer {
           const percentage = (params.progress * 100).toFixed(2);
 
           // Determine whether to show ETA or duration
-          let timeInfo;
+          let timeInfo: string;
           if (params.stopTime == null) {
             if (params.eta > 0) {
               const eta = this.formatTime(params.eta);
@@ -239,27 +239,32 @@ export class MediaOrganizer {
         stats: stats,
       });
 
-      for (const file of formatFiles) {
-        await semaphore.waitForUnlock();
-        semaphore.runExclusive(async () => {
-          try {
-            const fileInfo = await this.processor.processFile(file);
+      await Promise.all(
+        formatFiles.map(async (file) => {
+          await semaphore
+            .acquire()
+            .then(async () => {
+              try {
+                const fileInfo = await this.processor.processFile(file);
 
-            if (fileInfo.metadata.gpsLatitude && fileInfo.metadata.gpsLongitude)
-              stats.withGeoCount++;
-            if (fileInfo.metadata.imageDate) stats.withImageDateCount++;
-            if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
-            validFiles.push(file);
-          } catch {
-            // console.error(chalk.red(`Error processing file ${file}:`, e, e.stack));
-            stats.errorCount++;
-            errorFiles.push(file);
-          } finally {
-            bar.increment();
-          }
-        });
-      }
-      await semaphore.waitForUnlock(concurrency);
+                if (
+                  fileInfo.metadata.gpsLatitude &&
+                  fileInfo.metadata.gpsLongitude
+                )
+                  stats.withGeoCount++;
+                if (fileInfo.metadata.imageDate) stats.withImageDateCount++;
+                if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
+                validFiles.push(file);
+              } catch {
+                stats.errorCount++;
+                errorFiles.push(file);
+              } finally {
+                bar.increment();
+              }
+            })
+            .finally(() => semaphore.release());
+        }),
+      );
     }
 
     multibar.stop();
