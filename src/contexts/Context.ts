@@ -73,7 +73,11 @@ export class Context {
 
     injector.add(ExifTool, {
       scope: ProviderScope.SINGLETON,
-      useFactory: () => new ExifTool(),
+      useFactory: () => {
+        return new ExifTool({
+          maxProcs: options.concurrency || 1,
+        });
+      },
     });
 
     this._injectorService = injector;
