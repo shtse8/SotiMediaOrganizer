@@ -1,3 +1,5 @@
+import "reflect-metadata";
+
 import { parentPort, workerData } from "worker_threads";
 import { MediaComparator } from "../MediaComparator";
 import { WorkerData } from "./types";
@@ -10,7 +12,8 @@ const { options, root, fileInfoCache } = workerData as WorkerData;
 // Initialize the injector with the options passed from the main process
 await Context.ensureInitialized(options);
 
-const comparator = Context.injector.get<MediaComparator>(MediaComparator)!;
+const comparator =
+  await Context.injector.getAsync<MediaComparator>(MediaComparator)!;
 const processor = Context.injector.get<MediaProcessor>(MediaProcessor)!;
 processor.importCache(fileInfoCache);
 const vpTree = comparator.createVPTreeByRoot(root);

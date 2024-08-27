@@ -5,10 +5,10 @@ import {
   FrameInfo,
 } from "../types";
 import { FileHashBaseJob } from "./FileHashBaseJob";
-import sharp from "sharp";
-import ffmpeg from "fluent-ffmpeg";
 import { getFileType } from "../utils";
 import { injectable } from "inversify";
+import { SharpService } from "../contexts/SharpService";
+import { FFmpegService } from "../contexts/FFmpegService";
 
 @injectable()
 export class AdaptiveExtractionJob extends FileHashBaseJob<
@@ -17,8 +17,12 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 > {
   protected readonly jobName = "adaptiveExtraction";
 
-  constructor(config: AdaptiveExtractionConfig) {
-    super(config);
+  constructor(
+    protected config: AdaptiveExtractionConfig,
+    private sharpService: SharpService,
+    private ffmpegService: FFmpegService,
+  ) {
+    super();
   }
 
   protected async processFile(filePath: string): Promise<MediaInfo> {
@@ -51,7 +55,7 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
   }
 
   private async extractImageFrames(imagePath: string): Promise<FrameInfo[]> {
-    const image = sharp(imagePath);
+    const image = this.sharpService.create(imagePath);
     const data = await image
       .resize(this.config.resolution, this.config.resolution, {
         fit: "fill",
@@ -119,7 +123,8 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
       const frameSize = this.config.resolution * this.config.resolution;
       let currentTimestamp: number | null = null;
 
-      ffmpeg(videoPath)
+      this.ffmpegService
+        .ffmpeg(videoPath)
         .videoFilters([
           selectFilter,
           `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=disable`,
@@ -241,7 +246,7 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 
   private async getVideoDuration(videoPath: string): Promise<number> {
     return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(videoPath, (err, metadata) => {
+      this.ffmpegService.ffprobe(videoPath, (err, metadata) => {
         if (err) reject(err);
         else resolve(metadata.format.duration || 0);
       });

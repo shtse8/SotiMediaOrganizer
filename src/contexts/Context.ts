@@ -13,7 +13,9 @@ import { MediaProcessor } from "../MediaProcessor";
 import { AdaptiveExtractionJob } from "../jobs/AdaptiveExtractionJob";
 import { MetadataExtractionJob } from "../jobs/MetadataExtractionJob";
 import { FileStatsJob } from "../jobs/FileStatsJob";
-import { DatabaseContext } from "./DatabaseContext";
+import { DatabaseContext } from "./DatabaseService";
+import { SharpService } from "./SharpService";
+import { FFmpegService } from "./FFmpegService";
 
 export class Context {
   private static _container: Container | null;
@@ -35,10 +37,12 @@ export class Context {
     const container = new Container();
 
     // services
+    container.bind(SharpService).toSelf().inSingletonScope();
     container.bind(MediaComparator).toSelf().inSingletonScope();
     container.bind(MediaOrganizer).toSelf().inSingletonScope();
     container.bind(MediaProcessor).toSelf().inSingletonScope();
     container.bind(DatabaseContext).toSelf().inSingletonScope();
+    container.bind(FFmpegService).toSelf().inSingletonScope();
 
     // jobs
     container.bind(AdaptiveExtractionJob).toSelf().inSingletonScope();

@@ -247,8 +247,7 @@ export class MediaOrganizer {
                 if (fileInfo.metadata.imageDate) stats.withImageDateCount++;
                 if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
                 validFiles.push(file);
-              } catch (e) {
-                console.error(e);
+              } catch {
                 stats.errorCount++;
                 errorFiles.push(file);
               } finally {

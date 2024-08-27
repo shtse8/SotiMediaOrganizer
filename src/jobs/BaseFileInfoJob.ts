@@ -1,5 +1,5 @@
 import { Mutex } from "async-mutex";
-import { DatabaseContext } from "../contexts/DatabaseContext";
+import { DatabaseContext } from "../contexts/DatabaseService";
 import type { Database } from "lmdb";
 import eql from "deep-eql";
 import { hexToSharedArrayBuffer, sharedArrayBufferToHex } from "../utils";
@@ -18,7 +18,7 @@ export abstract class BaseFileInfoJob<TResult, TConfig = void> {
 
   protected abstract readonly jobName: string;
 
-  constructor(protected readonly config: TConfig) {}
+  protected readonly config: TConfig = null;
 
   @postConstruct()
   private async init() {

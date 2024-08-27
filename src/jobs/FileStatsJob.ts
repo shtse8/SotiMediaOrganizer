@@ -10,8 +10,8 @@ import { injectable } from "inversify";
 export class FileStatsJob extends BaseFileInfoJob<FileStats, FileStatsConfig> {
   protected readonly jobName = "fileStats";
 
-  constructor(config: FileStatsConfig) {
-    super(config);
+  constructor(protected config: FileStatsConfig) {
+    super();
   }
 
   protected async processFile(filePath: string): Promise<FileStats> {
