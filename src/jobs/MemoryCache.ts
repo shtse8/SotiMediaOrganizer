@@ -4,9 +4,11 @@ export class MemoryCache<T> {
   constructor(private readonly createFn: () => T) {}
 
   get(key: string): T {
-    if (!this.cache.has(key)) {
-      this.cache.set(key, this.createFn());
+    let value = this.cache.get(key);
+    if (!value) {
+      value = this.createFn();
+      this.cache.set(key, value);
     }
-    return this.cache.get(key)!;
+    return value;
   }
 }
