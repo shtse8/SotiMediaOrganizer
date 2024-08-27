@@ -1,13 +1,13 @@
 import { Mutex } from "async-mutex";
-import memoizee from "memoizee";
 import { DatabaseContext } from "../contexts/DatabaseContext";
 import { Context } from "../contexts/Context";
 import type { Database } from "lmdb";
 import eql from "deep-eql";
 import { hexToSharedArrayBuffer, sharedArrayBufferToHex } from "../utils";
+import { MemoryCache } from "./MemoryCache";
 
 export abstract class BaseFileInfoJob<TConfig, TResult> {
-  private readonly getLock = memoizee(() => new Mutex());
+  private readonly locks = new MemoryCache(() => new Mutex());
 
   private db: Database;
   private configDb: Database;
@@ -26,7 +26,7 @@ export abstract class BaseFileInfoJob<TConfig, TResult> {
   async process(filePath: string): Promise<TResult> {
     const cacheKey = await this.getHashKey(filePath);
 
-    return this.getLock(cacheKey).runExclusive(async () => {
+    return this.locks.get(cacheKey).runExclusive(async () => {
       const cachedConfig = (await this.configDb.get(cacheKey)) as TConfig;
       if (this.isConfigValid(filePath, cachedConfig)) {
         const cachedResult = (await this.db!.get(cacheKey)) as TResult;
