@@ -16,7 +16,7 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
   AdaptiveExtractionConfig
 > {
   protected readonly jobName = "adaptiveExtraction";
-  private readonly HASH_SIZE = 32;
+  private readonly HASH_SIZE = 8;
   private cosTable: Float32Array | null = null;
 
   constructor(
