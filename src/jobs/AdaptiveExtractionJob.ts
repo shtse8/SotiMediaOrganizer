@@ -258,7 +258,6 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 
   private fastDCT(input: Buffer, size: number): Float32Array {
     const output = new Float32Array(size * size);
-    const tmp = new Float32Array(size);
 
     // Row-wise DCT
     for (let y = 0; y < size; y++) {
