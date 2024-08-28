@@ -16,6 +16,8 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
   AdaptiveExtractionConfig
 > {
   protected readonly jobName = "adaptiveExtraction";
+  private readonly HASH_SIZE = 32;
+  private cosTable: Float32Array | null = null;
 
   constructor(
     protected config: AdaptiveExtractionConfig,
@@ -127,7 +129,7 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
         .ffmpeg(videoPath)
         .videoFilters([
           selectFilter,
-          `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=disable`,
+          `scale=${this.config.resolution}:${this.config.resolution}:force_original_aspect_ratio=disable:flags=lanczos`,
           "format=gray",
         ])
         .outputOptions(["-vsync", "vfr", "-f", "rawvideo", "-pix_fmt", "gray"])
@@ -208,31 +210,116 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
     return totalSeconds + milliseconds;
   }
 
+  private initializeCosTable(size: number): Float32Array {
+    const table = new Float32Array(size * size);
+    for (let u = 0; u < size; u++) {
+      for (let x = 0; x < size; x++) {
+        table[u * size + x] = Math.cos(
+          ((2 * x + 1) * u * Math.PI) / (2 * size),
+        );
+      }
+    }
+    return table;
+  }
+
   private computePerceptualHash(imageBuffer: Buffer): SharedArrayBuffer {
-    const pixelCount = this.config.resolution * this.config.resolution;
-    const hashSize = Math.ceil(pixelCount / 8);
+    const size = this.config.resolution;
+    const hashSize = this.HASH_SIZE;
     const hash = new SharedArrayBuffer(hashSize);
     const hashView = new Uint8Array(hash);
 
-    // Calculate average using a single pass
-    let sum = 0;
-    for (let i = 0; i < pixelCount; i++) {
-      sum += imageBuffer[i];
+    // Ensure cosTable is initialized for the current image size
+    if (!this.cosTable || this.cosTable.length !== size * size) {
+      this.cosTable = this.initializeCosTable(size);
     }
-    const average = sum / pixelCount;
 
-    // Compute hash using bit manipulation
+    // Perform 2D DCT
+    const dct = this.fastDCT(imageBuffer, size);
+
+    // Compute median of AC components for thresholding
+    const medianAC = this.computeMedianAC(dct, size);
+
+    // Compute hash
+    const scaleFactor = size / hashSize;
     for (let i = 0; i < hashSize; i++) {
-      let byte = 0;
-      for (let j = 0; j < 8 && i * 8 + j < pixelCount; j++) {
-        if (imageBuffer[i * 8 + j] > average) {
-          byte |= 1 << j;
+      hashView[i] = 0;
+      for (let j = 0; j < 8; j++) {
+        const x = Math.floor((j + 1) * scaleFactor);
+        const y = Math.floor((i + 1) * scaleFactor);
+        const idx = y * size + x;
+        if (dct[idx] > medianAC) {
+          hashView[i] |= 1 << j;
         }
       }
-      hashView[i] = byte;
     }
 
     return hash;
+  }
+
+  private fastDCT(input: Buffer, size: number): Float32Array {
+    const output = new Float32Array(size * size);
+    const tmp = new Float32Array(size);
+
+    // Row-wise DCT
+    for (let y = 0; y < size; y++) {
+      this.dct1d(input, y * size, output, y * size, size);
+    }
+
+    // Transpose
+    for (let i = 0; i < size; i++) {
+      for (let j = 0; j < i; j++) {
+        const a = i * size + j;
+        const b = j * size + i;
+        const temp = output[a];
+        output[a] = output[b];
+        output[b] = temp;
+      }
+    }
+
+    // Column-wise DCT (now row-wise due to transpose)
+    for (let y = 0; y < size; y++) {
+      this.dct1d(output, y * size, output, y * size, size);
+    }
+
+    // Scale the DC component
+    output[0] /= size;
+
+    return output;
+  }
+
+  private dct1d(
+    input: Buffer | Float32Array,
+    inputOffset: number,
+    output: Float32Array,
+    outputOffset: number,
+    size: number,
+  ): void {
+    const cosTable = this.cosTable!;
+
+    for (let k = 0; k < size; k++) {
+      let sum = 0;
+      for (let n = 0; n < size; n++) {
+        sum +=
+          (input instanceof Buffer
+            ? input[inputOffset + n]
+            : input[inputOffset + n]) * cosTable[k * size + n];
+      }
+      output[outputOffset + k] = sum * Math.sqrt(2 / size);
+    }
+  }
+
+  private computeMedianAC(dct: Float32Array, size: number): number {
+    const acValues = new Float32Array(size * size - 1);
+    let idx = 0;
+    for (let i = 0; i < size; i++) {
+      for (let j = 0; j < size; j++) {
+        if (i !== 0 || j !== 0) {
+          acValues[idx++] = dct[i * size + j];
+        }
+      }
+    }
+    acValues.sort();
+    return acValues[Math.floor(acValues.length / 2)];
   }
 
   async getDuration(filePath: string): Promise<number> {
