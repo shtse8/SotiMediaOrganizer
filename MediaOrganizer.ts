@@ -231,32 +231,26 @@ export class MediaOrganizer {
         stats: stats,
       });
 
-      await Promise.all(
-        formatFiles.map(async (file) => {
-          await semaphore
-            .acquire()
-            .then(async () => {
-              try {
-                const fileInfo = await this.processor.processFile(file);
+      for (const file of formatFiles) {
+        await semaphore.waitForUnlock();
+        semaphore.runExclusive(async () => {
+          try {
+            const fileInfo = await this.processor.processFile(file);
 
-                if (
-                  fileInfo.metadata.gpsLatitude &&
-                  fileInfo.metadata.gpsLongitude
-                )
-                  stats.withGeoCount++;
-                if (fileInfo.metadata.imageDate) stats.withImageDateCount++;
-                if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
-                validFiles.push(file);
-              } catch {
-                stats.errorCount++;
-                errorFiles.push(file);
-              } finally {
-                bar.increment();
-              }
-            })
-            .finally(() => semaphore.release());
-        }),
-      );
+            if (fileInfo.metadata.gpsLatitude && fileInfo.metadata.gpsLongitude)
+              stats.withGeoCount++;
+            if (fileInfo.metadata.imageDate) stats.withImageDateCount++;
+            if (fileInfo.metadata.cameraModel) stats.withCameraCount++;
+            validFiles.push(file);
+          } catch {
+            stats.errorCount++;
+            errorFiles.push(file);
+          } finally {
+            bar.increment();
+          }
+        });
+      }
+      await semaphore.waitForUnlock(concurrency);
     }
 
     multibar.stop();
