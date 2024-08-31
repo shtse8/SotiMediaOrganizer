@@ -28,7 +28,7 @@ export class VPTree<T> {
     points: T[],
     distance: (a: T, b: T) => MaybePromise<number>,
   ): Promise<VPTree<T>> {
-    const root = await VPTree.buildSubtree(points, distance);
+    const root = await VPTree.buildSubtree([...points], distance);
     return new VPTree(root, distance);
   }
 
