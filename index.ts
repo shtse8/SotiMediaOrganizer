@@ -210,7 +210,10 @@ async function main() {
     printResults(
       gatherFileInfoResult,
       deduplicationResult,
-      discoveredFiles.length,
+      [...discoveredFiles.values()].reduce(
+        (sum, files) => sum + files.length,
+        0,
+      ),
     );
   } catch (error) {
     console.error(chalk.red("An unexpected error occurred:"), error);

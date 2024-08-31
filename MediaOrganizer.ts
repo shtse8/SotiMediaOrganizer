@@ -39,7 +39,7 @@ export class MediaOrganizer {
   async discoverFiles(
     sourceDirs: string[],
     concurrency: number = 10,
-  ): Promise<string[]> {
+  ): Promise<Map<string, string[]>> {
     const allFiles: string[] = [];
     let dirCount = 0;
     let fileCount = 0;
@@ -82,23 +82,26 @@ export class MediaOrganizer {
     );
 
     // print file format statistics
-    const formatStats = new Map<string, number>();
+    const result = new Map<string, string[]>();
     for (const file of allFiles) {
       const ext = path.extname(file).slice(1).toLowerCase();
-      formatStats.set(ext, (formatStats.get(ext) ?? 0) + 1);
+      result.set(ext, result.get(ext) ?? []);
+      result.get(ext)!.push(file);
     }
 
     console.log(chalk.blue("\nFile Format Statistics:"));
-    for (const [format, count] of formatStats.entries()) {
+    for (const [format, count] of result.entries()) {
       console.log(
-        chalk.white(`${format.padEnd(6)}: ${count.toString().padStart(8)}`),
+        chalk.white(
+          `${format.padEnd(6)}: ${count.length.toString().padStart(8)}`,
+        ),
       );
     }
     console.log(
       chalk.green(`${"Total".padEnd(6)}: ${fileCount.toString().padStart(8)}`),
     );
 
-    return allFiles;
+    return result;
   }
 
   private formatTime(seconds: number): string {
@@ -122,7 +125,7 @@ export class MediaOrganizer {
   }
 
   async gatherFileInfo(
-    files: string[],
+    files: Map<string, string[]>,
     concurrency: number = 10,
   ): Promise<GatherFileInfoResult> {
     const formatStats = new Map<string, Stats>();
@@ -186,25 +189,15 @@ export class MediaOrganizer {
       cliProgress.Presets.shades_classic,
     );
 
-    // Group files by format
-    const filesByFormat = new Map<string, string[]>();
-    for (const file of files) {
-      const ext = path.extname(file).slice(1).toLowerCase();
-      if (ALL_SUPPORTED_EXTENSIONS.has(ext)) {
-        filesByFormat.set(ext, filesByFormat.get(ext) ?? []);
-        filesByFormat.get(ext)!.push(file);
-      }
-    }
-
-    const sortedFormats = Array.from(filesByFormat.keys()).sort(
+    const sortedFormats = Array.from(files.keys()).sort(
       (a, b) =>
         getFileTypeByExt(a) - getFileTypeByExt(b) ||
-        filesByFormat.get(b)!.length - filesByFormat.get(a)!.length,
+        files.get(b)!.length - files.get(a)!.length,
     );
 
     const bars = new Map<string, cliProgress.Bar>();
     for (const format of sortedFormats) {
-      const formatFiles = filesByFormat.get(format)!;
+      const formatFiles = files.get(format)!;
 
       const stats: Stats = {
         withGeoCount: 0,
@@ -223,7 +216,7 @@ export class MediaOrganizer {
 
     // Process files format by format
     for (const format of sortedFormats) {
-      const formatFiles = filesByFormat.get(format)!;
+      const formatFiles = files.get(format)!;
       const stats = formatStats.get(format)!;
       const bar = bars.get(format)!;
       bar.start(bar.getTotal(), 0, {
