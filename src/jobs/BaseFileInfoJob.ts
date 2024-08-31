@@ -2,7 +2,7 @@ import { Mutex } from "async-mutex";
 import { DatabaseContext } from "../contexts/DatabaseService";
 import type { Database } from "lmdb";
 import eql from "deep-eql";
-import { hexToSharedArrayBuffer, sharedArrayBufferToHex } from "../utils";
+import { bufferToSharedArrayBuffer, sharedArrayBufferToBuffer } from "../utils";
 import { MemoryCache } from "./MemoryCache";
 import { inject, injectable, postConstruct } from "inversify";
 
@@ -76,7 +76,7 @@ export abstract class BaseFileInfoJob<TResult, TConfig = void> {
     if (result instanceof SharedArrayBuffer) {
       return {
         type: "SharedArrayBuffer",
-        data: sharedArrayBufferToHex(result),
+        data: sharedArrayBufferToBuffer(result),
       };
     } else if (result instanceof Date) {
       return result;
@@ -98,7 +98,7 @@ export abstract class BaseFileInfoJob<TResult, TConfig = void> {
     if (stored && typeof stored === "object") {
       const storedObj = stored as Record<string, unknown>;
       if (storedObj.type === "SharedArrayBuffer") {
-        return hexToSharedArrayBuffer(storedObj.data as string) as TResult;
+        return bufferToSharedArrayBuffer(storedObj.data as Buffer) as TResult;
       } else if (storedObj instanceof Date) {
         return storedObj as TResult;
       } else if (Array.isArray(stored)) {
