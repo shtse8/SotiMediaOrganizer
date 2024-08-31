@@ -18,7 +18,6 @@ import { existsSync } from "fs";
 import crypto from "crypto";
 import chalk from "chalk";
 import { MultiBar, Presets } from "cli-progress";
-import { Semaphore } from "async-mutex";
 import cliProgress from "cli-progress";
 import path from "path";
 import { Spinner } from "@topcli/spinner";
@@ -26,6 +25,7 @@ import { MediaComparator } from "./MediaComparator";
 import { MediaProcessor } from "./src/MediaProcessor";
 import { ALL_SUPPORTED_EXTENSIONS, getFileTypeByExt } from "./src/utils";
 import { injectable } from "inversify";
+import { Semaphore } from "async-mutex";
 
 @injectable()
 export class MediaOrganizer {
@@ -232,8 +232,8 @@ export class MediaOrganizer {
       });
 
       for (const file of formatFiles) {
-        await semaphore.waitForUnlock();
-        semaphore.runExclusive(async () => {
+        const [, release] = await semaphore.acquire();
+        (async () => {
           try {
             const fileInfo = await this.processor.processFile(file);
 
@@ -247,8 +247,9 @@ export class MediaOrganizer {
             errorFiles.push(file);
           } finally {
             bar.increment();
+            release();
           }
-        });
+        })();
       }
       await semaphore.waitForUnlock(concurrency);
     }
