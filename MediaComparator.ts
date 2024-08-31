@@ -7,7 +7,6 @@ import {
   ProgramOptions,
   FileProcessor,
 } from "./src/types";
-import { cpus } from "os";
 import { MediaProcessor } from "./src/MediaProcessor";
 import { VPNode, VPTree } from "./VPTree";
 import { filterAsync, mapAsync } from "./src/utils";
@@ -74,7 +73,7 @@ export class MediaComparator {
     const batchSize = 2048;
     const numWorkers = Math.min(
       Math.ceil(files.length / batchSize),
-      cpus().length - 1,
+      this.options.concurrency,
     );
 
     const workerPool = new WorkerPool(
