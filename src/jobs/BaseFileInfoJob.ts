@@ -79,10 +79,7 @@ export abstract class BaseFileInfoJob<TResult, TConfig = void> {
         data: sharedArrayBufferToHex(result),
       };
     } else if (result instanceof Date) {
-      return {
-        type: "Date",
-        value: result.toISOString(),
-      };
+      return result;
     } else if (Array.isArray(result)) {
       return result.map((item) => this.convertToStorageFormat(item));
     } else if (this.isPlainObject(result)) {
@@ -101,11 +98,9 @@ export abstract class BaseFileInfoJob<TResult, TConfig = void> {
     if (stored && typeof stored === "object") {
       const storedObj = stored as Record<string, unknown>;
       if (storedObj.type === "SharedArrayBuffer") {
-        return hexToSharedArrayBuffer(
-          storedObj.data as string,
-        ) as unknown as TResult;
-      } else if (storedObj.type === "Date") {
-        return new Date(storedObj.value as string) as unknown as TResult;
+        return hexToSharedArrayBuffer(storedObj.data as string) as TResult;
+      } else if (storedObj instanceof Date) {
+        return storedObj as TResult;
       } else if (Array.isArray(stored)) {
         return (stored as unknown[]).map((item) =>
           this.convertFromStorageFormat(item),
