@@ -17,7 +17,9 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 > {
   protected readonly jobName = "adaptiveExtraction";
   private readonly HASH_SIZE = 8;
-  private cosTable: Float32Array | null = null;
+  private dctCoefficients: Float32Array;
+  private normFactors: Float32Array;
+  private scale: number;
 
   constructor(
     protected config: AdaptiveExtractionConfig,
@@ -25,6 +27,7 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
     private ffmpegService: FFmpegService,
   ) {
     super();
+    this.initializeConstants();
   }
 
   protected async processFile(filePath: string): Promise<MediaInfo> {
@@ -209,45 +212,49 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
 
     return totalSeconds + milliseconds;
   }
+  private initializeConstants(): void {
+    const size = this.config.resolution;
+    this.scale = Math.sqrt(2 / size);
 
-  private initializeCosTable(size: number): Float32Array {
-    const table = new Float32Array(size * size);
-    for (let u = 0; u < size; u++) {
+    // Pre-compute DCT coefficients
+    this.dctCoefficients = new Float32Array(size * this.HASH_SIZE);
+    for (let u = 0; u < this.HASH_SIZE; u++) {
       for (let x = 0; x < size; x++) {
-        table[u * size + x] = Math.cos(
+        this.dctCoefficients[u * size + x] = Math.cos(
           ((2 * x + 1) * u * Math.PI) / (2 * size),
         );
       }
     }
-    return table;
+
+    // Pre-compute normalization factors
+    this.normFactors = new Float32Array(this.HASH_SIZE);
+    for (let i = 0; i < this.HASH_SIZE; i++) {
+      this.normFactors[i] = i === 0 ? this.scale / Math.SQRT2 : this.scale;
+    }
   }
 
-  private computePerceptualHash(imageBuffer: Buffer): SharedArrayBuffer {
+  private computePerceptualHash(imageBuffer: Uint8Array): SharedArrayBuffer {
     const size = this.config.resolution;
     const hashSize = this.HASH_SIZE;
-    const hash = new SharedArrayBuffer(hashSize);
-    const hashView = new Uint8Array(hash);
 
-    // Ensure cosTable is initialized for the current image size
-    if (!this.cosTable || this.cosTable.length !== size * size) {
-      this.cosTable = this.initializeCosTable(size);
+    if (imageBuffer.length !== size * size) {
+      throw new Error(
+        `Invalid input buffer size. Expected ${size * size}, got ${imageBuffer.length}`,
+      );
     }
 
-    // Perform 2D DCT
+    const hash = new SharedArrayBuffer(hashSize);
+    const hashView = new Uint8Array(hash);
     const dct = this.fastDCT(imageBuffer, size);
 
     // Compute median of AC components for thresholding
-    const medianAC = this.computeMedianAC(dct, size);
+    const medianAC = this.computeMedianAC(dct);
 
     // Compute hash
-    const scaleFactor = size / hashSize;
     for (let i = 0; i < hashSize; i++) {
       hashView[i] = 0;
       for (let j = 0; j < 8; j++) {
-        const x = Math.floor((j + 1) * scaleFactor);
-        const y = Math.floor((i + 1) * scaleFactor);
-        const idx = y * size + x;
-        if (dct[idx] > medianAC) {
+        if (dct[i * hashSize + j] > medianAC) {
           hashView[i] |= 1 << j;
         }
       }
@@ -256,69 +263,58 @@ export class AdaptiveExtractionJob extends FileHashBaseJob<
     return hash;
   }
 
-  private fastDCT(input: Buffer, size: number): Float32Array {
-    const output = new Float32Array(size * size);
+  private fastDCT(input: Uint8Array, size: number): Float32Array {
+    const output = new Float32Array(this.HASH_SIZE * this.HASH_SIZE);
+    const temp = new Float32Array(this.HASH_SIZE);
 
-    // Row-wise DCT
+    // Row-wise DCT and partial column-wise DCT
     for (let y = 0; y < size; y++) {
-      this.dct1d(input, y * size, output, y * size, size);
-    }
+      // Calculate row-wise DCT values
+      for (let u = 0; u < this.HASH_SIZE; u++) {
+        let sum = 0;
+        const coeffOffset = u * size;
+        for (let x = 0; x < size; x++) {
+          sum += input[y * size + x] * this.dctCoefficients[coeffOffset + x];
+        }
+        temp[u] = sum;
+      }
 
-    // Transpose
-    for (let i = 0; i < size; i++) {
-      for (let j = 0; j < i; j++) {
-        const a = i * size + j;
-        const b = j * size + i;
-        const temp = output[a];
-        output[a] = output[b];
-        output[b] = temp;
+      // Partial column-wise DCT (only for the first HASH_SIZE columns)
+      for (let v = 0; v < this.HASH_SIZE; v++) {
+        const normFactor = this.normFactors[v];
+        const vCoeff = this.dctCoefficients[v * size + y];
+        const outputOffset = v * this.HASH_SIZE;
+        for (let u = 0; u < this.HASH_SIZE; u++) {
+          output[outputOffset + u] += normFactor * temp[u] * vCoeff;
+        }
       }
     }
-
-    // Column-wise DCT (now row-wise due to transpose)
-    for (let y = 0; y < size; y++) {
-      this.dct1d(output, y * size, output, y * size, size);
-    }
-
-    // Scale the DC component
-    output[0] /= size;
 
     return output;
   }
 
-  private dct1d(
-    input: Buffer | Float32Array,
-    inputOffset: number,
-    output: Float32Array,
-    outputOffset: number,
-    size: number,
-  ): void {
-    const cosTable = this.cosTable!;
-
-    for (let k = 0; k < size; k++) {
-      let sum = 0;
-      for (let n = 0; n < size; n++) {
-        sum +=
-          (input instanceof Buffer
-            ? input[inputOffset + n]
-            : input[inputOffset + n]) * cosTable[k * size + n];
-      }
-      output[outputOffset + k] = sum * Math.sqrt(2 / size);
-    }
+  private computeMedianAC(dct: Float32Array): number {
+    // Use QuickSelect algorithm to find the median
+    const acValues = dct.slice(1);
+    const k = Math.floor(acValues.length / 2);
+    return this.quickSelect(acValues, k, (a, b) => Math.abs(a) - Math.abs(b));
   }
 
-  private computeMedianAC(dct: Float32Array, size: number): number {
-    const acValues = new Float32Array(size * size - 1);
-    let idx = 0;
-    for (let i = 0; i < size; i++) {
-      for (let j = 0; j < size; j++) {
-        if (i !== 0 || j !== 0) {
-          acValues[idx++] = dct[i * size + j];
-        }
-      }
-    }
-    acValues.sort();
-    return acValues[Math.floor(acValues.length / 2)];
+  private quickSelect(
+    arr: Float32Array,
+    k: number,
+    compareFn: (a: number, b: number) => number,
+  ): number {
+    if (arr.length === 1) return arr[0];
+
+    const pivot = arr[Math.floor(Math.random() * arr.length)];
+    const left = arr.filter((x) => compareFn(x, pivot) < 0);
+    const equal = arr.filter((x) => compareFn(x, pivot) === 0);
+    const right = arr.filter((x) => compareFn(x, pivot) > 0);
+
+    if (k < left.length) return this.quickSelect(left, k, compareFn);
+    if (k < left.length + equal.length) return pivot;
+    return this.quickSelect(right, k - left.length - equal.length, compareFn);
   }
 
   async getDuration(filePath: string): Promise<number> {

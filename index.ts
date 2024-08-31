@@ -105,19 +105,19 @@ async function main() {
       "--image-similarity-threshold <number>",
       "Threshold for image similarity (default: 0.99)",
       parseFloat,
-      0.92,
+      0.99,
     )
     .option(
       "--image-video-similarity-threshold <number>",
       "Threshold for image-video similarity. For image-video, we use a lower threshold because the frames are not always the same (default: 0.98)",
       parseFloat,
-      0.92,
+      0.93,
     )
     .option(
       "--video-similarity-threshold <number>",
       "Threshold for video similarity. For video similarity, we use an even lower threshold because the frames are not always the same (default: 0.97)",
       parseFloat,
-      0.92,
+      0.93,
     )
     .option(
       "--max-chunk-size <number>",
