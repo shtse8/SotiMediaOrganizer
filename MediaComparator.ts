@@ -30,28 +30,48 @@ export class MediaComparator {
       this.similarityConfig.videoSimilarityThreshold,
     );
   }
+
   private hammingDistance(
     hash1: SharedArrayBuffer,
     hash2: SharedArrayBuffer,
   ): number {
-    const view1 = new Uint32Array(hash1);
-    const view2 = new Uint32Array(hash2);
+    // Use BigUint64Array for 64-bit operations
+    const view1 = new BigUint64Array(hash1);
+    const view2 = new BigUint64Array(hash2);
 
-    let distance = 0;
+    let distance = 0n;
+
+    // Process 64-bit chunks
     for (let i = 0; i < view1.length; i++) {
-      distance += this.popcount32(view1[i] ^ view2[i]);
+      distance += this.popcount64(view1[i] ^ view2[i]);
     }
 
-    return distance;
+    // Handle remaining bytes
+    const remainingBytes = hash1.byteLength % 8;
+    if (remainingBytes > 0) {
+      const uint8View1 = new Uint8Array(hash1);
+      const uint8View2 = new Uint8Array(hash2);
+      const startIndex = hash1.byteLength - remainingBytes;
+
+      for (let i = startIndex; i < hash1.byteLength; i++) {
+        distance += BigInt(this.popcount8(uint8View1[i] ^ uint8View2[i]));
+      }
+    }
+
+    return Number(distance);
   }
 
-  private popcount32(x: number): number {
-    x = x - ((x >>> 1) & 0x55555555);
-    x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
-    x = (x + (x >>> 4)) & 0x0f0f0f0f;
-    x += x >>> 8;
-    x += x >>> 16;
-    return x & 0x3f;
+  private popcount64(n: bigint): bigint {
+    n = n - ((n >> 1n) & 0x5555555555555555n);
+    n = (n & 0x3333333333333333n) + ((n >> 2n) & 0x3333333333333333n);
+    n = (n + (n >> 4n)) & 0x0f0f0f0f0f0f0f0fn;
+    return (n * 0x0101010101010101n) >> 56n;
+  }
+
+  private popcount8(n: number): number {
+    n = n - ((n >> 1) & 0x55);
+    n = (n & 0x33) + ((n >> 2) & 0x33);
+    return (n + (n >> 4)) & 0x0f;
   }
 
   async deduplicateFiles(
