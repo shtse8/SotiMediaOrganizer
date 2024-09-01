@@ -6,13 +6,14 @@ import {
   SimilarityConfig,
   ProgramOptions,
   FileProcessor,
+  WorkerData,
 } from "./src/types";
 import { MediaProcessor } from "./src/MediaProcessor";
 import { VPNode, VPTree } from "./VPTree";
 import { filterAsync, mapAsync } from "./src/utils";
-import { WorkerPool } from "./src/WorkerPool";
-import { hammingDistanceSIMD } from "./build";
 import { injectable } from "inversify";
+import workerpool from "workerpool";
+import type { CustomWorker } from "./src/worker";
 
 @injectable()
 export class MediaComparator {
@@ -33,7 +34,15 @@ export class MediaComparator {
     hash1: SharedArrayBuffer,
     hash2: SharedArrayBuffer,
   ): number {
-    return hammingDistanceSIMD(new Uint8Array(hash1), new Uint8Array(hash2));
+    const view1 = new Uint32Array(hash1);
+    const view2 = new Uint32Array(hash2);
+
+    let distance = 0;
+    for (let i = 0; i < view1.length; i++) {
+      distance += this.popcount32(view1[i] ^ view2[i]);
+    }
+
+    return distance;
   }
 
   private popcount32(x: number): number {
@@ -71,35 +80,47 @@ export class MediaComparator {
     progressCallback?: (progress: string) => void,
   ): Promise<Set<string>[]> {
     const batchSize = 2048;
-    const numWorkers = Math.min(
-      Math.ceil(files.length / batchSize),
-      this.options.concurrency,
-    );
 
-    const workerPool = new WorkerPool(
-      "./src/deduplicationWorker.js",
-      numWorkers,
-      {
-        options: this.options,
-        root: vpTree.getRoot(),
-        fileInfoCache: this.mediaProcessor.exportCache(),
-      },
-    );
-
-    workerPool.on("progress", ({ processed, total }) => {
-      progressCallback?.("Processed " + processed + " of " + total + " files");
+    const pool = workerpool.pool("src/worker.js", {
+      workerType: "web",
+      maxWorkers: this.options.concurrency,
     });
 
-    const results = await workerPool.processInBatches<string, Set<string>[]>(
-      files,
-      batchSize,
-      "dbscan",
-    );
+    // Batch the files and send them to the worker pool
+    let processedItems = 0;
+    const totalItems = files.length;
+    const promises = [];
+    for (let i = 0; i < totalItems; i += batchSize) {
+      const batch = files.slice(i, i + batchSize);
+      promises.push(
+        pool
+          .proxy<CustomWorker>()
+          .then((worker) =>
+            worker.performDBSCAN(
+              <WorkerData>{
+                root: vpTree.getRoot(),
+                fileInfoCache: this.mediaProcessor.exportCache(),
+                options: this.options,
+              },
+              batch,
+            ),
+          )
+          .then((result) => {
+            processedItems += batch.length;
+            progressCallback?.(
+              `Running DBSCAN: ${processedItems} / ${totalItems} files processed`,
+            );
+            return result;
+          }),
+      );
+    }
 
-    workerPool.terminate();
+    const results = await Promise.all(promises);
+    await pool.terminate();
 
     return this.mergeAndDeduplicate(results.flat());
   }
+
   private mergeAndDeduplicate(clusters: Set<string>[]): Set<string>[] {
     const merged: Set<string>[] = [];
     const elementToClusterMap = new Map<string, Set<string>>();
@@ -198,6 +219,7 @@ export class MediaComparator {
     });
     const media1 = (await this.mediaProcessor.processFile(point)).media;
     const result = await filterAsync(neighbors, async (neighbor) => {
+      if (neighbor.point === point) return true;
       const similarity = 1 - neighbor.distance;
       const media2 = (await this.mediaProcessor.processFile(neighbor.point))
         .media;

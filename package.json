@@ -33,7 +33,8 @@
     "inversify": "^6.0.2",
     "lmdb": "^3.0.13",
     "reflect-metadata": "^0.2.2",
-    "sharp": "^0.33.5"
+    "sharp": "^0.33.5",
+    "workerpool": "^9.1.3"
   },
   "devDependencies": {
     "@datastructures-js/heap": "^4.3.3",

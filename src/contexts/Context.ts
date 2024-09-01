@@ -33,7 +33,11 @@ export class Context {
       return;
     }
     Context._isInitialized = true;
+    this._container = this.createContainer(options);
+    await this._container.loadAsync();
+  }
 
+  static createContainer(options?: ProgramOptions) {
     const container = new Container();
 
     // services
@@ -83,8 +87,6 @@ export class Context {
       )
       .inSingletonScope();
 
-    this._container = container;
-
-    await container.loadAsync();
+    return container;
   }
 }
