@@ -1,8 +1,8 @@
 import { VPNode } from "../VPTree";
 
 export enum FileType {
-  Image,
   Video,
+  Image,
 }
 
 export interface ProcessingConfig {
@@ -63,7 +63,6 @@ export class ProgramOptions {
   maxChunkSize: number;
 
   // extraction
-  shortVideoThreshold: number;
   minFrames: number;
   maxSceneFrames: number;
   targetFps: number;
@@ -78,7 +77,6 @@ export class ProgramOptions {
 export class AdaptiveExtractionConfig {
   resolution: number;
   sceneChangeThreshold: number;
-  shortVideoThreshold: number;
   minFrames: number;
   maxSceneFrames: number;
   targetFps: number;

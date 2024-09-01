@@ -16,6 +16,9 @@ import { FileStatsJob } from "../jobs/FileStatsJob";
 import { DatabaseContext } from "./DatabaseService";
 import { SharpService } from "./SharpService";
 import { FFmpegService } from "./FFmpegService";
+import workerpool from "workerpool";
+import type { CustomWorker } from "../worker/worker";
+import { Types, WorkerPool } from "./types";
 
 export class Context {
   private static _container: Container | null;
@@ -34,7 +37,7 @@ export class Context {
     }
     Context._isInitialized = true;
     this._container = this.createContainer(options);
-    await this._container.loadAsync();
+    // await this._container.loadAsync();
   }
 
   static createContainer(options?: ProgramOptions) {
@@ -60,7 +63,6 @@ export class Context {
     container.bind(AdaptiveExtractionConfig).toConstantValue({
       resolution: options?.resolution || 64,
       sceneChangeThreshold: options?.sceneChangeThreshold || 0.01,
-      shortVideoThreshold: options?.shortVideoThreshold || 15,
       minFrames: options?.minFrames || 15,
       maxSceneFrames: options?.maxSceneFrames || 200,
       targetFps: options?.targetFps || 0.5,
@@ -85,6 +87,19 @@ export class Context {
             maxProcs: options?.concurrency || 1,
           }),
       )
+      .inSingletonScope();
+
+    container
+      .bind<WorkerPool>(Types.WorkerPool)
+      .toDynamicValue(async () => {
+        const pool = workerpool.pool("src/worker/worker.ts", {
+          workerType: "web",
+          maxWorkers: options.concurrency,
+        });
+
+        const worker = await pool.proxy<CustomWorker>();
+        return worker;
+      })
       .inSingletonScope();
 
     return container;

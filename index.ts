@@ -57,25 +57,19 @@ async function main() {
       "--min-frames <number>",
       "Minimum number of frames to extract from videos",
       parseInt,
-      15,
+      5,
     )
     .option(
       "--max-scene-frames <number>",
       "Maximum number of frames to extract from scene changes",
       parseInt,
-      200,
-    )
-    .option(
-      "--short-video-threshold <number>",
-      "Duration threshold for short videos (in seconds)",
-      parseFloat,
-      15,
+      100,
     )
     .option(
       "--target-fps <number>",
       "Target frames per second for video extraction",
       parseFloat,
-      0.5,
+      2,
     )
 
     .option(
@@ -99,7 +93,7 @@ async function main() {
       "--scene-change-threshold <number>",
       "Threshold for scene change detection",
       parseFloat,
-      0.01,
+      0.05,
     )
     .option(
       "--image-similarity-threshold <number>",

@@ -11,9 +11,8 @@ import {
 import { MediaProcessor } from "./src/MediaProcessor";
 import { VPNode, VPTree } from "./VPTree";
 import { filterAsync, mapAsync } from "./src/utils";
-import { injectable } from "inversify";
-import workerpool from "workerpool";
-import type { CustomWorker } from "./src/worker";
+import { inject, injectable } from "inversify";
+import { Types, type WorkerPool } from "./src/contexts/types";
 
 @injectable()
 export class MediaComparator {
@@ -23,6 +22,7 @@ export class MediaComparator {
     private mediaProcessor: MediaProcessor,
     private similarityConfig: SimilarityConfig,
     private options: ProgramOptions,
+    @inject(Types.WorkerPool) private workerPool: WorkerPool,
   ) {
     this.minThreshold = Math.min(
       this.similarityConfig.imageSimilarityThreshold,
@@ -101,11 +101,6 @@ export class MediaComparator {
   ): Promise<Set<string>[]> {
     const batchSize = 2048;
 
-    const pool = workerpool.pool("src/worker.js", {
-      workerType: "web",
-      maxWorkers: this.options.concurrency,
-    });
-
     // Batch the files and send them to the worker pool
     let processedItems = 0;
     const totalItems = files.length;
@@ -113,17 +108,14 @@ export class MediaComparator {
     for (let i = 0; i < totalItems; i += batchSize) {
       const batch = files.slice(i, i + batchSize);
       promises.push(
-        pool
-          .proxy<CustomWorker>()
-          .then((worker) =>
-            worker.performDBSCAN(
-              <WorkerData>{
-                root: vpTree.getRoot(),
-                fileInfoCache: this.mediaProcessor.exportCache(),
-                options: this.options,
-              },
-              batch,
-            ),
+        this.workerPool
+          .performDBSCAN(
+            <WorkerData>{
+              root: vpTree.getRoot(),
+              fileInfoCache: this.mediaProcessor.exportCache(),
+              options: this.options,
+            },
+            batch,
           )
           .then((result) => {
             processedItems += batch.length;
@@ -136,7 +128,6 @@ export class MediaComparator {
     }
 
     const results = await Promise.all(promises);
-    await pool.terminate();
 
     return this.mergeAndDeduplicate(results.flat());
   }
